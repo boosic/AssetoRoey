@@ -54,15 +54,34 @@ class ThemeManager:
         self.mode = "light"
         self._texts: list[tk.Text] = []
         self._menus: list[tk.Menu] = []
+        self._combos: list[ttk.Combobox] = []
+
+    @staticmethod
+    def _prune(widgets: list) -> list:
+        alive = []
+        for w in widgets:
+            try:
+                if w.winfo_exists():
+                    alive.append(w)
+            except tk.TclError:
+                pass
+        return alive
 
     # -- registration -------------------------------------------------------
     def register_text(self, widget: tk.Text):
+        self._texts = self._prune(self._texts)
         self._texts.append(widget)
         self._style_text(widget, PALETTES[self.mode])
 
     def register_menu(self, menu: tk.Menu):
+        self._menus = self._prune(self._menus)
         self._menus.append(menu)
         self._style_menu(menu, PALETTES[self.mode])
+
+    def register_combobox(self, combo: ttk.Combobox):
+        self._combos = self._prune(self._combos)
+        self._combos.append(combo)
+        self._style_combo_popdown(combo, PALETTES[self.mode])
 
     # -- application --------------------------------------------------------
     def apply(self, mode: str):
@@ -162,11 +181,15 @@ class ThemeManager:
         s.configure("TCheckbutton", background=p["bg"], foreground=p["fg"])
         s.map("TCheckbutton", background=[("active", p["bg"])])
 
+        self._texts = self._prune(self._texts)
         for w in self._texts:
-            if w.winfo_exists():
-                self._style_text(w, p)
+            self._style_text(w, p)
+        self._menus = self._prune(self._menus)
         for m in self._menus:
             self._style_menu(m, p)
+        self._combos = self._prune(self._combos)
+        for cb in self._combos:
+            self._style_combo_popdown(cb, p)
 
     @staticmethod
     def _style_text(widget: tk.Text, p: dict):
@@ -176,6 +199,19 @@ class ThemeManager:
                          selectforeground=p["fg"],
                          inactiveselectbackground=p["select"],
                          highlightthickness=0, borderwidth=0)
+
+    @staticmethod
+    def _style_combo_popdown(combo: ttk.Combobox, p: dict):
+        """option_add only styles popdown listboxes created afterwards; an
+        already-realized popdown must be re-configured directly."""
+        try:
+            combo.tk.call(f"{combo}.popdown.f.l", "configure",
+                          "-background", p["field"],
+                          "-foreground", p["fg"],
+                          "-selectbackground", p["select"],
+                          "-selectforeground", p["fg"])
+        except tk.TclError:
+            pass    # popdown not created yet — option_add covers it
 
     @staticmethod
     def _style_menu(menu: tk.Menu, p: dict):
@@ -300,7 +336,10 @@ class FileExplorer(ttk.Frame):
         self.tree.configure(yscrollcommand=ybar.set)
         ybar.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
-        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        # Open on click / Enter — NOT on <<TreeviewSelect>>, which fires for
+        # every arrow-key step and would open a tab per file passed over.
+        self.tree.bind("<ButtonRelease-1>", self._on_click)
+        self.tree.bind("<Return>", self._on_activate)
 
     # -- population ---------------------------------------------------------
     def load(self, root_path: Path | None):
@@ -338,22 +377,31 @@ class FileExplorer(ttk.Frame):
             if p.name in self.IGNORED:
                 continue
             iid = str(p)
+            if self.tree.exists(iid):     # symlink aliases of a seen path
+                continue
             if p.is_dir():
                 self.tree.insert(parent_iid, "end", iid=iid, open=False,
                                  text=f"📁 {p.name}")
-                self._insert_children(iid, p)
+                # Never descend through a symlinked dir — 'ln -s .. up'
+                # style loops would otherwise recurse forever.
+                if not p.is_symlink():
+                    self._insert_children(iid, p)
             else:
                 self.tree.insert(parent_iid, "end", iid=iid,
                                  text=f"📄 {p.name}")
 
     # -- interaction --------------------------------------------------------
-    def _on_select(self, _event=None):
-        sel = self.tree.selection()
-        if not sel:
-            return
-        path = Path(sel[0])
-        if path.is_file():
-            self.app.open_file(path)
+    def _open_iid(self, iid: str):
+        if iid:
+            path = Path(iid)
+            if path.is_file():
+                self.app.open_file(path)
+
+    def _on_click(self, event):
+        self._open_iid(self.tree.identify_row(event.y))
+
+    def _on_activate(self, _event=None):
+        self._open_iid(self.tree.focus())
 
     def select_path(self, path: Path):
         iid = str(path)
@@ -453,7 +501,14 @@ class NewProjectDialog(tk.Toplevel):
             self.vars["location"].set(chosen)
 
     def _create(self):
-        location = Path(self.vars["location"].get().strip())
+        loc_text = self.vars["location"].get().strip()
+        if not loc_text:
+            messagebox.showerror("New Car Project",
+                                 "Please choose a location folder.",
+                                 parent=self)
+            return
+        # Resolve so stored settings / explorer paths are always absolute.
+        location = Path(loc_text).expanduser().resolve()
         car_id = sanitize_car_id(self.vars["car_id"].get())
         screen_name = self.vars["screen_name"].get().strip() or car_id
         brand = self.vars["brand"].get().strip() or "Unknown"
@@ -502,6 +557,7 @@ class ACModStudio(tk.Tk):
         self.theme = ThemeManager(self)
         self.project_root: Path | None = None
         self._editors: dict[str, BaseEditor] = {}
+        self._closing: set = set()
 
         self.dark_var = tk.BooleanVar(
             value=self.settings.get("theme", "dark") == "dark")
@@ -513,12 +569,20 @@ class ACModStudio(tk.Tk):
 
         self.theme.apply("dark" if self.dark_var.get() else "light")
 
-        self.bind_all("<Control-s>", lambda e: self.save_active())
-        self.bind_all("<Control-n>", lambda e: self.new_project_dialog())
-        self.bind_all("<Control-o>", lambda e: self.open_project_dialog())
-        self.bind_all("<Control-w>", lambda e: self.close_active_tab())
-        self.bind_all("<Control-d>", lambda e: self.toggle_dark())
-        self.bind_all("<F5>", lambda e: self.explorer.refresh())
+        # Tk's Text/Entry class bindings claim Ctrl+D (delete char),
+        # Ctrl+O (insert newline) and Ctrl+N (next line) — and class bindings
+        # fire BEFORE bind_all, so they would edit the buffer on top of our
+        # accelerators. Neutralize them; arrow keys/Delete cover the loss.
+        for cls in ("Text", "Entry", "TEntry", "TCombobox", "TSpinbox"):
+            for seq in ("<Control-d>", "<Control-o>", "<Control-n>"):
+                self.bind_class(cls, seq, lambda e: None)
+
+        self.bind_all("<Control-s>", self._accel(self.save_active))
+        self.bind_all("<Control-n>", self._accel(self.new_project_dialog))
+        self.bind_all("<Control-o>", self._accel(self.open_project_dialog))
+        self.bind_all("<Control-w>", self._accel(self.close_active_tab))
+        self.bind_all("<Control-d>", self._accel(self.toggle_dark))
+        self.bind_all("<F5>", self._accel(lambda: self.explorer.refresh()))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.workspace.add(WelcomePane(self.workspace, self),
@@ -527,6 +591,16 @@ class ACModStudio(tk.Tk):
         last = self.settings.get("last_project")
         if last and Path(last).is_dir():
             self.load_project(Path(last))
+
+    def _accel(self, fn):
+        """Wrap a keyboard accelerator: inert while a modal dialog holds the
+        grab, and 'break' stops any later bindings."""
+        def handler(_event=None):
+            if self.grab_current() is not None:
+                return None
+            fn()
+            return "break"
+        return handler
 
     # ------------------------------------------------------------------ ui
     def _build_menubar(self):
@@ -654,7 +728,8 @@ class ACModStudio(tk.Tk):
 
         path = Path(path)
         try:
-            head = path.read_bytes()[:2048]
+            with path.open("rb") as fh:      # never slurp a 300MB .kn5
+                head = fh.read(2048)
         except OSError as exc:
             messagebox.showerror("Open file", f"Cannot read {path}:\n{exc}",
                                  parent=self)
@@ -667,7 +742,13 @@ class ACModStudio(tk.Tk):
                 "your compiled KN5/FMOD/PNG files on disk.", parent=self)
             return
 
-        editor = self._route(path)
+        try:
+            editor = self._route(path)
+        except Exception as exc:             # noqa: BLE001 - keep shell alive
+            messagebox.showerror(
+                "Open file", f"Could not open {path.name}:\n{exc}",
+                parent=self)
+            return
         self._editors[key] = editor
         self.workspace.add(editor, text=f"  {editor.display_name}  ")
         self.workspace.select(editor)
@@ -700,31 +781,49 @@ class ACModStudio(tk.Tk):
             widget = self.nametowidget(self.workspace.tabs()[index])
         except (IndexError, KeyError, tk.TclError):
             return
-        if isinstance(widget, BaseEditor) and widget.dirty:
-            answer = messagebox.askyesnocancel(
-                "Unsaved changes",
-                f"Save changes to {widget.display_name} before closing?",
-                parent=self)
-            if answer is None:
-                return
-            if answer:
-                widget.save()
-        for key, ed in list(self._editors.items()):
-            if ed is widget:
-                del self._editors[key]
-        self.workspace.forget(index)
-        widget.destroy()
+        self._close_widget(widget)
+
+    def _close_widget(self, widget):
+        """Close by widget, not index: the confirm dialog is modal and other
+        close requests can land meanwhile, shifting tab indices."""
+        if widget in self._closing:
+            return
+        self._closing.add(widget)
+        try:
+            if isinstance(widget, BaseEditor) and widget.dirty:
+                answer = messagebox.askyesnocancel(
+                    "Unsaved changes",
+                    f"Save changes to {widget.display_name} before closing?",
+                    parent=self)
+                if answer is None:
+                    return
+                if answer and not widget.save():
+                    return              # save failed — keep the tab open
+            for key, ed in list(self._editors.items()):
+                if ed is widget:
+                    del self._editors[key]
+            try:
+                if str(widget) in self.workspace.tabs():
+                    self.workspace.forget(widget)
+            except tk.TclError:
+                pass
+            widget.destroy()
+        finally:
+            self._closing.discard(widget)
 
     def close_active_tab(self):
         try:
-            self.close_tab(self.workspace.index(self.workspace.select()))
-        except tk.TclError:
-            pass
+            widget = self.nametowidget(self.workspace.select())
+        except (KeyError, tk.TclError):
+            return
+        self._close_widget(widget)
 
     # ----------------------------------------------------- ADD COMPONENT ▾
     def _build_component_menu(self):
         menu = self.component_menu
         menu.delete(0, "end")
+        for child in menu.winfo_children():   # drop last post's submenus
+            child.destroy()
         editor = self.active_editor
         if not isinstance(editor, ConfigEditor):
             menu.add_command(
@@ -783,7 +882,8 @@ class ACModStudio(tk.Tk):
                 return
             if answer:
                 for e in dirty:
-                    e.save()
+                    if not e.save():
+                        return      # save failed — stay open, data intact
         self._save_settings()
         self.destroy()
 

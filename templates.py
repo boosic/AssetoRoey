@@ -46,7 +46,7 @@ Replace this text file with a real model:
   1. Model the car in Blender/3ds Max (Z forward, meters, origin at CoG).
   2. Export FBX and compile with ksEditor (AC SDK) or the Blender
      "Assetto Corsa (.kn5)" community exporter.
-  3. Optional LODs use the Kunos naming: $car_LOD_B.kn5, _LOD_C, _LOD_D
+  3. Optional LODs use the Kunos naming: ${car}_LOD_B.kn5, _LOD_C, _LOD_D
      wired up in data/lods.ini.
 """
 
@@ -424,7 +424,7 @@ RATE_HZ=250\t\t\t\t; ABS pulse frequency
 
 [TRACTION_CONTROL]
 SLIP_RATIO_LIMIT=0.11\t\t\t; Slipratio limit before TC engages
-CURVE=\t\t\t\t\t; e.g. CURVE=tc_curve.lut for multi-level TC
+CURVE=\t\t\t\t\t; optional slipratio lut (level | slip limit) for multi-level TC. Leave blank for a single level
 PRESENT=1
 ACTIVE=1
 RATE_HZ=170\t\t\t\t; TC pulse frequency
@@ -1123,6 +1123,13 @@ SUSPENSION_TYPE_DEFAULTS = {
     },
 }
 
+# Keys whose sliders must snap to whole numbers (counts and 0/1 flags) —
+# "LINK_COUNT=3.37" would be nonsense in a physics file.
+SLIDER_INT_KEYS = {
+    "LINK_COUNT", "DEBUG_LOG", "COCKPIT_ADJUSTABLE", "PRESENT", "ACTIVE",
+    "COUNT", "USE_LOAD", "INDEX",
+}
+
 # Slider ranges for the suspension editor. Keyed by "SECTION/KEY" (wins) or
 # plain "KEY". Anything not listed gets a heuristic range from its value.
 SLIDER_HINTS = {
@@ -1285,14 +1292,18 @@ COMPONENT_LIBRARY = {
             ],
         },
         "Active Aero": {
+            # A (value, comment) tuple attaches the inline comment so the
+            # cross-file wing index is self-documenting in the saved file.
             "Airbrake (brake + speed controllers)": [
                 ("DYNAMIC_CONTROLLER_#", {
-                    "WING": "1", "COMBINATOR": "ADD", "INPUT": "BRAKE",
+                    "WING": ("1", "; index of the [WING_N] to move"),
+                    "COMBINATOR": "ADD", "INPUT": "BRAKE",
                     "LUT": "wing_controller_brake.lut", "FILTER": "0.90",
                     "UP_LIMIT": "6", "DOWN_LIMIT": "0",
                 }),
                 ("DYNAMIC_CONTROLLER_#", {
-                    "WING": "1", "COMBINATOR": "MULT", "INPUT": "SPEED_KMH",
+                    "WING": ("1", "; index of the [WING_N] to move"),
+                    "COMBINATOR": "MULT", "INPUT": "SPEED_KMH",
                     "LUT": "wing_controller_speed.lut", "FILTER": "0.90",
                     "UP_LIMIT": "6", "DOWN_LIMIT": "0",
                 }),
@@ -1303,14 +1314,16 @@ COMPONENT_LIBRARY = {
         "DRS": {
             "F1-style (track DRS zones)": [
                 ("HEADER", {"VERSION": "1"}),
-                # WING_1 must match the movable wing's index in aero.ini
-                ("WING_1", {"MODE": "ANGLE", "EFFECT": "0.1", "ANGLE": "0"}),
+                ("WING_1", {"MODE": ("ANGLE", "; section index must match "
+                                     "the movable [WING_N] in aero.ini"),
+                            "EFFECT": "0.1", "ANGLE": "0"}),
                 ("DEACTIVATION", {"LIMIT_G": "6.9"}),
             ],
             "Road car (usable anywhere)": [
                 ("HEADER", {"VERSION": "1"}),
-                ("WING_1", {"MODE": "EFFECT", "EFFECT": "0.1",
-                            "ANGLE": "0"}),
+                ("WING_1", {"MODE": ("EFFECT", "; section index must match "
+                                     "the movable [WING_N] in aero.ini"),
+                            "EFFECT": "0.1", "ANGLE": "0"}),
                 ("DRS_ZONES", {"IGNORE_ZONES": "1"}),
                 ("DEACTIVATION", {"LIMIT_G": "6.9"}),
             ],
@@ -1320,8 +1333,10 @@ COMPONENT_LIBRARY = {
         "Wing Animation": {
             "DRS flap animation": [
                 ("HEADER", {"VERSION": "2"}),
-                ("ANIMATION_#", {"WING": "1", "FILE": "wing_rear.ksanim",
-                                 "MIN": "0", "MAX": "16"}),
+                ("ANIMATION_#", {
+                    "WING": ("1", "; index of the [WING_N] in aero.ini "
+                                  "that drives this animation"),
+                    "FILE": "wing_rear.ksanim", "MIN": "0", "MAX": "16"}),
             ],
         },
     },

@@ -14,6 +14,7 @@ Everything is pure stdlib (tkinter / ttk).
 from __future__ import annotations
 
 import json
+import math
 import re
 import tkinter as tk
 import tkinter.font as tkfont
@@ -22,12 +23,30 @@ from tkinter import messagebox, ttk
 
 from templates import (
     SLIDER_HINTS,
+    SLIDER_INT_KEYS,
     SUSPENSION_TYPES,
     SUSPENSION_TYPE_DEFAULTS,
 )
 
 MONO_FONT = ("Consolas", 10)
-_COMMENT_MARKS = (";", "//", "#")
+# AC's own INI reader treats ';' and '//' as comments — NOT '#', which can be
+# real data ("SCREEN_NAME=Car #12").
+_COMMENT_MARKS = (";", "//")
+
+
+def read_text_any(path: Path) -> tuple[str, str]:
+    """Read a config file with encoding detection. Returns (text, encoding)
+    where encoding is what should be used to write the file back, so a
+    cp1252 file is not silently transcoded to UTF-8 on save. A UTF-8 BOM is
+    stripped (AC dislikes BOMs)."""
+    data = path.read_bytes()
+    for enc, write_enc in (("utf-8-sig", "utf-8"), ("cp1252", "cp1252"),
+                           ("latin-1", "latin-1")):
+        try:
+            return data.decode(enc), write_enc
+        except UnicodeDecodeError:
+            continue
+    return data.decode("latin-1", errors="replace"), "latin-1"
 
 
 # ---------------------------------------------------------------------------
@@ -66,8 +85,10 @@ class Section:
         return default
 
     def set(self, key: str, value: str) -> Entry:
-        """Update an existing key (case-insensitive) or append a new one."""
-        for e in self.kv_entries():
+        """Update an existing key (case-insensitive) or append a new one.
+        With duplicate keys, the LAST one wins in AC's reader, so that is
+        the one updated."""
+        for e in reversed(self.kv_entries()):
             if e.key.upper() == key.upper():
                 e.value = value
                 return e
@@ -101,7 +122,12 @@ class ConfigDocument:
     def parse(cls, text: str) -> "ConfigDocument":
         doc = cls()
         current: Section | None = None
-        for raw_line in text.splitlines():
+        # Split only on real line endings: splitlines() would also break on
+        # U+0085/U+000C, which appear as data after a latin-1 fallback read.
+        lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()
+        for raw_line in lines:
             line = raw_line.strip()
             if line.startswith("["):
                 end = line.find("]")
@@ -179,7 +205,8 @@ class ConfigDocument:
 
         A section name ending in ``#`` (e.g. ``TURBO_#``) is auto-numbered to
         the next free index.  A fixed-name section that already exists gets its
-        keys merged (template values win, extra user keys survive).
+        keys merged (template values win, extra user keys survive).  A value
+        may be a ``(value, "; comment")`` tuple to attach an inline comment.
         Returns the names of the sections that were created/updated."""
         touched: list[str] = []
         for name, keys in sections:
@@ -189,7 +216,11 @@ class ConfigDocument:
             else:
                 sec = self.section(name) or self.add_section(name)
             for key, value in keys.items():
-                sec.set(key, str(value))
+                if isinstance(value, tuple):
+                    entry = sec.set(key, str(value[0]))
+                    entry.comment = value[1]
+                else:
+                    sec.set(key, str(value))
             touched.append(sec.name)
         return touched
 
@@ -200,14 +231,18 @@ class ConfigDocument:
 
 def _as_float(value: str):
     """Return the float for a plain scalar value, else None (vectors, text,
-    inline LUTs and lut file names are not sliderable)."""
+    inline LUTs, lut file names, and non-finite/absurd numbers like 'nan',
+    'inf' or '1e999' are not sliderable)."""
     v = value.strip()
     if not v or "," in v or "(" in v or "|" in v:
         return None
     try:
-        return float(v)
+        f = float(v)
     except ValueError:
         return None
+    if not math.isfinite(f) or abs(f) > 1e12:
+        return None
+    return f
 
 
 def _fmt_num(v: float) -> str:
@@ -226,9 +261,8 @@ def _fmt_num(v: float) -> str:
 
 def _nice_ceil(x: float) -> float:
     """Round *up* to a 'nice' 1/2/5×10^k number for slider limits."""
-    if x <= 0:
+    if not math.isfinite(x) or x <= 0:
         return 1.0
-    import math
     exp = math.floor(math.log10(x))
     for mult in (1, 2, 5, 10):
         candidate = mult * (10 ** exp)
@@ -311,6 +345,19 @@ class BaseEditor(ttk.Frame):
         self.path = Path(path)
         self.app = app
         self.dirty = False
+        self.encoding = "utf-8"
+
+    def _write_to_disk(self, content: str) -> bool:
+        """Write with the encoding the file was read in. Returns False (and
+        tells the user) on failure so callers can abort close/exit flows."""
+        try:
+            self.path.write_text(content, encoding=self.encoding)
+        except (OSError, UnicodeError) as exc:
+            messagebox.showerror(
+                "Save failed", f"Could not save {self.path}:\n{exc}",
+                parent=self)
+            return False
+        return True
 
     # -- dirty tracking -----------------------------------------------------
     def mark_dirty(self):
@@ -372,10 +419,7 @@ class RawTextEditor(BaseEditor):
         wrapper = self._make_text(self)
         wrapper.pack(fill="both", expand=True)
         self.text = wrapper.text
-        try:
-            content = self.path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            content = self.path.read_text(encoding="latin-1")
+        content, self.encoding = read_text_any(self.path)
         self.text.insert("1.0", content)
         self.text.edit_reset()
         self.text.edit_modified(False)
@@ -398,10 +442,12 @@ class RawTextEditor(BaseEditor):
         self.text.insert("1.0", pretty)
         self.mark_dirty()
 
-    def save(self):
-        self.path.write_text(self.text.get("1.0", "end-1c"), encoding="utf-8")
+    def save(self) -> bool:
+        if not self._write_to_disk(self.text.get("1.0", "end-1c")):
+            return False
         self.mark_clean()
         self.app.set_status(f"Saved {self.path.name}")
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -421,10 +467,7 @@ class ConfigEditor(BaseEditor):
 
     def __init__(self, master, path: Path, app):
         super().__init__(master, path, app)
-        try:
-            text = self.path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            text = self.path.read_text(encoding="latin-1")
+        text, self.encoding = read_text_any(self.path)
         self.doc = ConfigDocument.parse(text)
 
         self._rows = []               # per-row state (see _RowBinding)
@@ -461,6 +504,9 @@ class ConfigEditor(BaseEditor):
             self.raw_text.delete("1.0", "end")
             self.raw_text.insert("1.0", content)
             self.raw_text.edit_modified(False)
+            # Programmatic replaces must never sit on the user's undo stack:
+            # otherwise Ctrl+Z on the raw tab could blank the whole buffer.
+            self.raw_text.edit_reset()
             self.raw_text.yview_moveto(yview[0])
         finally:
             self._sync_guard = False
@@ -482,13 +528,15 @@ class ConfigEditor(BaseEditor):
         self._pending_sync = self.after(150, self._sync_raw_from_doc)
 
     def _sync_raw_from_doc(self):
+        # Cancel-first so direct callers can never leave an orphaned timer.
+        if self._pending_sync is not None:
+            self.after_cancel(self._pending_sync)
         self._pending_sync = None
         self._set_raw(self.doc.serialize())
 
     def _flush_raw_edits(self):
         """If the user hand-edited the raw tab, fold it back into the model."""
         if self._pending_sync is not None:      # visual edits still queued
-            self.after_cancel(self._pending_sync)
             self._sync_raw_from_doc()
         if self._raw_dirty:
             self.doc = ConfigDocument.parse(self.raw_text.get("1.0", "end-1c"))
@@ -504,7 +552,6 @@ class ConfigEditor(BaseEditor):
             self._flush_raw_edits()
         else:                  # Raw selected → make sure it shows latest model
             if self._pending_sync is not None:
-                self.after_cancel(self._pending_sync)
                 self._sync_raw_from_doc()
 
     # --------------------------------------------------------------- saving
@@ -513,17 +560,14 @@ class ConfigEditor(BaseEditor):
                 "Reload", f"Discard unsaved changes to {self.path.name}?",
                 parent=self):
             return
-        try:
-            text = self.path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            text = self.path.read_text(encoding="latin-1")
+        text, self.encoding = read_text_any(self.path)
         self.doc = ConfigDocument.parse(text)
         self.rebuild_visual()
         self._set_raw(self.doc.serialize())
         self.mark_clean()
         self.app.set_status(f"Reloaded {self.path.name}")
 
-    def save(self):
+    def save(self) -> bool:
         if self._raw_dirty:
             # Raw tab holds the newest edits — save it verbatim.
             content = self.raw_text.get("1.0", "end-1c")
@@ -532,13 +576,14 @@ class ConfigEditor(BaseEditor):
             self.rebuild_visual()
         else:
             if self._pending_sync is not None:
-                self.after_cancel(self._pending_sync)
                 self._sync_raw_from_doc()
             content = self.doc.serialize()
             self._set_raw(content)
-        self.path.write_text(content, encoding="utf-8")
+        if not self._write_to_disk(content):
+            return False
         self.mark_clean()
         self.app.set_status(f"Saved {self.path.name}")
+        return True
 
     # ------------------------------------------------------- component menu
     def inject_component(self, label: str, sections: list[tuple[str, dict]]):
@@ -594,7 +639,8 @@ class ConfigEditor(BaseEditor):
         self._rows.append(var)
 
         def on_write(*_):
-            entry.value = var.get()
+            # A pasted newline would shatter the KEY=VALUE line structure.
+            entry.value = var.get().replace("\n", " ").replace("\r", " ")
             self.mark_dirty()
             self._schedule_raw_sync()
         var.trace_add("write", on_write)
@@ -644,13 +690,18 @@ class _SliderRow:
             return
         self._guard = True
         try:
-            self.var.set(_fmt_num(float(raw)))   # trace fires: model updates,
+            v = float(raw)
+            if self.entry.key.upper() in SLIDER_INT_KEYS:
+                text = str(int(round(v)))        # LINK_COUNT=3.37 is nonsense
+            else:
+                text = _fmt_num(v)
+            self.var.set(text)                   # trace fires: model updates,
         finally:                                  # slider write-back is skipped
             self._guard = False
 
     # -- text typed → update model, stretch limits, move slider -------------
     def _on_typed(self, *_):
-        self.entry.value = self.var.get()
+        self.entry.value = self.var.get().replace("\n", " ").replace("\r", " ")
         self.editor.mark_dirty()
         self.editor._schedule_raw_sync()
         if self._guard:
@@ -718,6 +769,15 @@ class SuspensionEditor(ConfigEditor):
         combo = ttk.Combobox(box, textvariable=var, values=values,
                              state="readonly", width=12)
         combo.grid(row=r, column=1, sticky="w", pady=3)
+        # The TCombobox class binding spins the value on mouse wheel — over a
+        # scrollable grid that would silently change the suspension TYPE.
+        # Scroll the grid instead and stop the class binding with "break".
+        def wheel_guard(event):
+            ScrollableFrame._on_wheel_global(event)
+            return "break"
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            combo.bind(seq, wheel_guard)
+        self.app.theme.register_combobox(combo)
         hint = ttk.Label(box, text=self._type_hint(entry.value),
                          style="Muted.TLabel")
         hint.grid(row=r, column=2, columnspan=2, sticky="w", padx=(10, 2))
