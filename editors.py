@@ -130,6 +130,10 @@ class ConfigDocument:
 
     # -- serialisation ------------------------------------------------------
     def serialize(self) -> str:
+        if not self.sections and not any(l.strip() for l in self.preamble):
+            # Keep genuinely empty files zero-byte: AC treats the mere
+            # presence of a non-empty drs.ini as "car has DRS".
+            return ""
         out: list[str] = list(self.preamble)
         for i, sec in enumerate(self.sections):
             header = f"[{sec.name}]"
@@ -234,7 +238,14 @@ def _nice_ceil(x: float) -> float:
 
 
 class ScrollableFrame(ttk.Frame):
-    """Canvas-based vertically scrollable frame (mousewheel aware)."""
+    """Canvas-based vertically scrollable frame.
+
+    Mousewheel handling is a single application-wide binding that walks up
+    from the widget under the pointer to the nearest ScrollableFrame — this
+    keeps the wheel working over the entries/sliders that cover the grid,
+    and multiple open editors never fight over ``bind_all``."""
+
+    _wheel_installed = False
 
     def __init__(self, master, **kw):
         super().__init__(master, **kw)
@@ -247,9 +258,7 @@ class ScrollableFrame(ttk.Frame):
         self._win = self.canvas.create_window((0, 0), window=self.interior, anchor="nw")
         self.interior.bind("<Configure>", self._on_interior_configure)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
-        for w in (self.canvas, self.interior):
-            w.bind("<Enter>", self._bind_wheel)
-            w.bind("<Leave>", self._unbind_wheel)
+        self._install_wheel_binding()
 
     def _on_interior_configure(self, _event=None):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
@@ -258,21 +267,36 @@ class ScrollableFrame(ttk.Frame):
         self.canvas.itemconfigure(self._win, width=event.width)
 
     # -- mousewheel (Windows / macOS / X11) ---------------------------------
-    def _bind_wheel(self, _event=None):
-        self.canvas.bind_all("<MouseWheel>", self._on_wheel)
-        self.canvas.bind_all("<Button-4>", self._on_wheel)
-        self.canvas.bind_all("<Button-5>", self._on_wheel)
+    def _install_wheel_binding(self):
+        if ScrollableFrame._wheel_installed:
+            return
+        ScrollableFrame._wheel_installed = True
+        root = self.winfo_toplevel()
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            root.bind_all(seq, ScrollableFrame._on_wheel_global, add="+")
 
-    def _unbind_wheel(self, _event=None):
-        self.canvas.unbind_all("<MouseWheel>")
-        self.canvas.unbind_all("<Button-4>")
-        self.canvas.unbind_all("<Button-5>")
-
-    def _on_wheel(self, event):
-        if event.num == 4 or event.delta > 0:
-            self.canvas.yview_scroll(-2, "units")
-        elif event.num == 5 or event.delta < 0:
-            self.canvas.yview_scroll(2, "units")
+    @staticmethod
+    def _on_wheel_global(event):
+        widget = event.widget
+        if not isinstance(widget, tk.Misc):        # e.g. already destroyed
+            return
+        try:
+            # Scroll what is under the pointer (on Windows the event goes to
+            # the focus widget, so event.widget alone is not enough).
+            under = widget.winfo_containing(event.x_root, event.y_root)
+        except (KeyError, tk.TclError):
+            under = None
+        target = under or widget
+        while target is not None:
+            if isinstance(target, ScrollableFrame):
+                break
+            target = target.master
+        if target is None:
+            return
+        if getattr(event, "num", None) == 4 or getattr(event, "delta", 0) > 0:
+            target.canvas.yview_scroll(-2, "units")
+        elif getattr(event, "num", None) == 5 or getattr(event, "delta", 0) < 0:
+            target.canvas.yview_scroll(2, "units")
 
 
 # ---------------------------------------------------------------------------

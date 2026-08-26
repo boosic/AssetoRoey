@@ -318,26 +318,26 @@ DEBUG_LOG=0\t\t\t\t; ACTIVATES DAMAGE DEBUG IN THE LOG
 _AERO_INI = """[HEADER]
 VERSION=2
 
-[WING_0]
-NAME=BODY
-CHORD=2.20\t\t\t\t; longitudinal length of the wing in meters
-SPAN=1.75\t\t\t\t; lateral width of the wing in meters
-POSITION=0,0.10,0.20\t\t\t; x,y,z position relative to CoG
-LUT_AOA_CL=wing_body_AOA_CL.lut\t\t; angle of attack -> lift coefficient
-LUT_GH_CL=\t\t\t\t; ground height -> CL multiplier (optional)
-CL_GAIN=1.0
-LUT_AOA_CD=wing_body_AOA_CD.lut\t\t; angle of attack -> drag coefficient
-LUT_GH_CD=\t\t\t\t; ground height -> CD multiplier (optional)
-CD_GAIN=1.0
-ANGLE=0\t\t\t\t\t; wing angle in degrees
-ZONE_FRONT_CL=0.30\t\t\t; damage sensitivity multipliers per impact zone
-ZONE_FRONT_CD=0.35
-ZONE_REAR_CL=0.30
-ZONE_REAR_CD=0.35
-ZONE_LEFT_CL=0.15
-ZONE_LEFT_CD=0.10
-ZONE_RIGHT_CL=0.15
-ZONE_RIGHT_CD=0.10
+[WING_0]\t\t\t\t\t; Wing identifier. A car can have as many wings as necessary
+NAME=BODY\t\t\t\t; name of the wing
+CHORD=1\t\t\t\t\t; length of the wing in meters
+SPAN=1.73\t\t\t\t; width of the wing in meters. both help determine the frontal area of the wing
+POSITION=0,0.23,-0.30\t\t\t; position in x,y,z starting from the CoG
+LUT_AOA_CL=wing_body_AOA_CL.lut\t\t; Coefficient of Lift lookup table
+LUT_GH_CL=\t\t\t\t; Height aero lift multiplier lookup table
+CL_GAIN=0\t\t\t\t; Coefficient of Lift multiplier (for easy fine tuning)
+LUT_AOA_CD=wing_body_AOA_CD.lut\t\t; Coefficient of drag lookup table
+LUT_GH_CD=\t\t\t\t; Height aero drag multiplier table
+CD_GAIN=1.0\t\t\t\t; Coefficient of drag multiplier (for easy fine tuning)
+ANGLE=1\t\t\t\t\t; Default starting wing angle (degrees)
+ZONE_FRONT_CL=0\t\t\t\t; CL=CL/(1.0+ZONE_x_CL*DAMAGE)
+ZONE_FRONT_CD=0\t\t\t\t; CD=CD*(1.0+ZONE_x_CD*DAMAGE)
+ZONE_REAR_CL=0
+ZONE_REAR_CD=0
+ZONE_LEFT_CL=0
+ZONE_LEFT_CD=0.01
+ZONE_RIGHT_CL=0
+ZONE_RIGHT_CD=0.01
 """
 
 # ---------------------------------------------------------------------------
@@ -356,28 +356,187 @@ _POWER_LUT = """0|0
 7500|270
 """
 
-_WING_BODY_CL = """-90|0
--12|-0.10
--6|-0.05
-0|0.00
-6|-0.02
-12|-0.06
-90|0
+# Road-car body aero (values follow Kunos ks_mazda_mx5_nd2)
+_WING_BODY_CL = """-10|-0.20
+-2|-0.035
+0|-0.030
+2|-0.025
+5|-0.015
+8|-0.008
+10|0
+30|0
 """
 
-_WING_BODY_CD = """-90|1.20
--12|0.55
--6|0.44
-0|0.42
-6|0.46
-12|0.60
-90|1.20
+_WING_BODY_CD = """-10|1
+-2|0.47
+0|0.46
+2|0.48
+5|0.49
+8|0.50
+10|0.52
+30|1
+"""
+
+# Formula-style front wing (Kunos SDK formula_k)
+_WING_FRONT_CL = """-10|-0.4
+0|0.34
+4|0.42
+8|0.50
+12|0.58
+16|0.66
+17|0.68
+18|0.64
+19|0.60
+20|0.55
+"""
+
+_WING_FRONT_CD = """-10|1
+0|0.1
+4|0.108
+8|0.116
+12|0.124
+16|0.132
+17|0.140
+18|0.147
+19|0.153
+20|0.160
+"""
+
+# Formula-style rear wing with stall past 17 degrees (Kunos SDK formula_k)
+_WING_REAR_CL = """-10|-0.4
+0|0.22
+2|0.29
+4|0.360
+6|0.430
+8|0.500
+10|0.570
+12|0.640
+14|0.71
+16|0.780
+17|0.815
+18|0.780
+19|0.700
+20|0.600
+"""
+
+_WING_REAR_CD = """-10|1
+0|0.15
+2|0.16
+4|0.17
+6|0.18
+8|0.19
+10|0.20
+12|0.21
+14|0.22
+16|0.23
+17|0.24
+18|0.30
+19|0.35
+20|0.40
+"""
+
+# DRS-style movable flap: produces load only once deployed past ~3 degrees
+_WING_MOVABLE_CL = """-10|-0.1
+0|0
+3|0
+6|0.10
+9|0.18
+12|0.26
+16|0.35
+20|0.30
+"""
+
+_WING_MOVABLE_CD = """-10|0.2
+0|0.01
+3|0.01
+6|0.03
+9|0.05
+12|0.07
+16|0.10
+20|0.14
+"""
+
+_WING_DIFFUSER_CL = """-10|0
+-1|0.05
+0|0.18
+1|0.192
+2|0.190
+5|0.170
+8|0.100
+10|0.05
+12|0.0
+"""
+
+_WING_DIFFUSER_CD = """-10|0
+0|0
+12|0
+"""
+
+# Ground-height multipliers: downforce rises as the car gets lower,
+# dies when the surface touches the ground
+_HEIGHT_FRONTWING_CL = """0|0
+0.010|1.25
+0.040|1.10
+0.050|1.05
+0.060|1.00
+0.070|0.95
+0.080|0.9
+0.090|0.7
+0.120|0.4
+"""
+
+_HEIGHT_FRONTWING_CD = """0|0.970
+0.030|0.985
+0.060|1.006
+0.120|1.010
+"""
+
+_HEIGHT_DIFFUSER_CL = """0|0
+0.010|1.15
+0.020|1.1
+0.030|1.05
+0.040|1.0
+0.050|0.95
+0.070|0.90
+0.080|0.4
+"""
+
+_HEIGHT_DIFFUSER_CD = """0|0.970
+0.030|0.985
+0.060|1.006
+0.120|1.010
+"""
+
+# Airbrake controller tables: +5 deg past 30% brake, gated above 60 km/h
+_CONTROLLER_BRAKE = """0|0
+0.29|0
+0.3|5
+1|5
+"""
+
+_CONTROLLER_SPEED = """0|0
+60|0
+61|1
 """
 
 LUT_FILES = {
     "power.lut": _POWER_LUT,
     "wing_body_AOA_CL.lut": _WING_BODY_CL,
     "wing_body_AOA_CD.lut": _WING_BODY_CD,
+    "wing_front_AOA_CL.lut": _WING_FRONT_CL,
+    "wing_front_AOA_CD.lut": _WING_FRONT_CD,
+    "wing_rear_AOA_CL.lut": _WING_REAR_CL,
+    "wing_rear_AOA_CD.lut": _WING_REAR_CD,
+    "wing_rearmovable_AOA_CL.lut": _WING_MOVABLE_CL,
+    "wing_rearmovable_AOA_CD.lut": _WING_MOVABLE_CD,
+    "wing_diffuser_AOA_CL.lut": _WING_DIFFUSER_CL,
+    "wing_diffuser_AOA_CD.lut": _WING_DIFFUSER_CD,
+    "height_frontwing_CL.lut": _HEIGHT_FRONTWING_CL,
+    "height_frontwing_CD.lut": _HEIGHT_FRONTWING_CD,
+    "height_diffuser_CL.lut": _HEIGHT_DIFFUSER_CL,
+    "height_diffuser_CD.lut": _HEIGHT_DIFFUSER_CD,
+    "wing_controller_brake.lut": _CONTROLLER_BRAKE,
+    "wing_controller_speed.lut": _CONTROLLER_SPEED,
 }
 
 CONFIG_TEMPLATES = {
@@ -385,6 +544,11 @@ CONFIG_TEMPLATES = {
     "engine.ini": _ENGINE_INI,
     "suspensions.ini": _SUSPENSIONS_INI,
     "aero.ini": _AERO_INI,
+    # Kunos SDK sample ships these zero-byte: an EMPTY drs.ini keeps DRS
+    # disabled (any non-empty drs.ini enables it). Populate them via the
+    # " ADD COMPONENT ▾" DRS / Wing Animation templates.
+    "drs.ini": "",
+    "wing_animations.ini": "",
 }
 
 # ---------------------------------------------------------------------------
@@ -593,51 +757,118 @@ COMPONENT_LIBRARY = {
         "Aero Wing": {
             "Rear Wing": [
                 ("WING_#", {
-                    "NAME": "REAR_WING", "CHORD": "0.30", "SPAN": "1.40",
-                    "POSITION": "0,0.90,-2.10",
+                    "NAME": "REAR", "CHORD": "1", "SPAN": "1.0",
+                    "POSITION": "0,0.15,-1.186",
                     "LUT_AOA_CL": "wing_rear_AOA_CL.lut", "LUT_GH_CL": "",
                     "CL_GAIN": "1.0",
                     "LUT_AOA_CD": "wing_rear_AOA_CD.lut", "LUT_GH_CD": "",
                     "CD_GAIN": "1.0", "ANGLE": "6",
-                    "ZONE_REAR_CL": "0.9", "ZONE_REAR_CD": "0.9",
+                    "ZONE_FRONT_CL": "0", "ZONE_FRONT_CD": "0",
+                    "ZONE_REAR_CL": "0.01", "ZONE_REAR_CD": "0.01",
+                    "ZONE_LEFT_CL": "0", "ZONE_LEFT_CD": "0",
+                    "ZONE_RIGHT_CL": "0", "ZONE_RIGHT_CD": "0",
                 }),
             ],
-            "Front Splitter": [
+            "Front Wing / Splitter (ground effect)": [
                 ("WING_#", {
-                    "NAME": "FRONT_SPLITTER", "CHORD": "0.50", "SPAN": "1.60",
-                    "POSITION": "0,0.05,1.90",
-                    "LUT_AOA_CL": "wing_front_AOA_CL.lut", "LUT_GH_CL": "",
+                    "NAME": "FRONT", "CHORD": "1", "SPAN": "1.0",
+                    "POSITION": "0,-0.215,1.700",
+                    "LUT_AOA_CL": "wing_front_AOA_CL.lut",
+                    "LUT_GH_CL": "height_frontwing_CL.lut",
                     "CL_GAIN": "1.0",
-                    "LUT_AOA_CD": "wing_front_AOA_CD.lut", "LUT_GH_CD": "",
+                    "LUT_AOA_CD": "wing_front_AOA_CD.lut",
+                    "LUT_GH_CD": "height_frontwing_CD.lut",
+                    "CD_GAIN": "1.0", "ANGLE": "6",
+                    "ZONE_FRONT_CL": "0.01", "ZONE_FRONT_CD": "0.01",
+                    "ZONE_REAR_CL": "0", "ZONE_REAR_CD": "0",
+                    "ZONE_LEFT_CL": "0", "ZONE_LEFT_CD": "0",
+                    "ZONE_RIGHT_CL": "0", "ZONE_RIGHT_CD": "0",
+                }),
+            ],
+            "Diffuser (ground effect)": [
+                ("WING_#", {
+                    "NAME": "DIFFUSER", "CHORD": "1", "SPAN": "1.0",
+                    "POSITION": "0,-0.25,-1.18",
+                    "LUT_AOA_CL": "wing_diffuser_AOA_CL.lut",
+                    "LUT_GH_CL": "height_diffuser_CL.lut",
+                    "CL_GAIN": "1.0",
+                    "LUT_AOA_CD": "wing_diffuser_AOA_CD.lut",
+                    "LUT_GH_CD": "height_diffuser_CD.lut",
                     "CD_GAIN": "1.0", "ANGLE": "0",
-                    "ZONE_FRONT_CL": "0.9", "ZONE_FRONT_CD": "0.9",
+                    "ZONE_REAR_CL": "0.01", "ZONE_REAR_CD": "0.01",
                 }),
             ],
             "Car Body Aero": [
                 ("WING_#", {
-                    "NAME": "BODY", "CHORD": "2.20", "SPAN": "1.75",
-                    "POSITION": "0,0.10,0.20",
+                    "NAME": "BODY", "CHORD": "1", "SPAN": "1.73",
+                    "POSITION": "0,0.23,-0.30",
                     "LUT_AOA_CL": "wing_body_AOA_CL.lut", "LUT_GH_CL": "",
-                    "CL_GAIN": "1.0",
+                    "CL_GAIN": "0",
                     "LUT_AOA_CD": "wing_body_AOA_CD.lut", "LUT_GH_CD": "",
-                    "CD_GAIN": "1.0", "ANGLE": "0",
-                    "ZONE_FRONT_CL": "0.30", "ZONE_FRONT_CD": "0.35",
-                    "ZONE_REAR_CL": "0.30", "ZONE_REAR_CD": "0.35",
-                    "ZONE_LEFT_CL": "0.15", "ZONE_LEFT_CD": "0.10",
-                    "ZONE_RIGHT_CL": "0.15", "ZONE_RIGHT_CD": "0.10",
+                    "CD_GAIN": "1.0", "ANGLE": "1",
+                    "ZONE_FRONT_CL": "0", "ZONE_FRONT_CD": "0",
+                    "ZONE_REAR_CL": "0", "ZONE_REAR_CD": "0",
+                    "ZONE_LEFT_CL": "0", "ZONE_LEFT_CD": "0.01",
+                    "ZONE_RIGHT_CL": "0", "ZONE_RIGHT_CD": "0.01",
                 }),
             ],
         },
         "DRS": {
-            "DRS Rear Flap": [
+            "DRS Movable Rear Flap": [
+                # The flap-only loads live in the rearmovable LUTs (zero
+                # below 3 deg). Enable DRS itself in data/drs.ini with a
+                # [WING_N] matching this wing's index.
                 ("WING_#", {
-                    "NAME": "DRS", "CHORD": "0.20", "SPAN": "1.40",
-                    "POSITION": "0,0.95,-2.15",
-                    "LUT_AOA_CL": "wing_drs_AOA_CL.lut", "LUT_GH_CL": "",
+                    "NAME": "REAR_MOVABLE", "CHORD": "1", "SPAN": "1.0",
+                    "POSITION": "0,0.15,-1.186",
+                    "LUT_AOA_CL": "wing_rearmovable_AOA_CL.lut",
+                    "LUT_GH_CL": "",
                     "CL_GAIN": "1.0",
-                    "LUT_AOA_CD": "wing_drs_AOA_CD.lut", "LUT_GH_CD": "",
-                    "CD_GAIN": "1.0", "ANGLE": "8",
+                    "LUT_AOA_CD": "wing_rearmovable_AOA_CD.lut",
+                    "LUT_GH_CD": "",
+                    "CD_GAIN": "1.0", "ANGLE": "12",
+                    "ZONE_REAR_CL": "0.01", "ZONE_REAR_CD": "0.01",
                 }),
+            ],
+        },
+        "Active Aero": {
+            "Airbrake (brake + speed controllers)": [
+                ("DYNAMIC_CONTROLLER_#", {
+                    "WING": "1", "COMBINATOR": "ADD", "INPUT": "BRAKE",
+                    "LUT": "wing_controller_brake.lut", "FILTER": "0.90",
+                    "UP_LIMIT": "6", "DOWN_LIMIT": "0",
+                }),
+                ("DYNAMIC_CONTROLLER_#", {
+                    "WING": "1", "COMBINATOR": "MULT", "INPUT": "SPEED_KMH",
+                    "LUT": "wing_controller_speed.lut", "FILTER": "0.90",
+                    "UP_LIMIT": "6", "DOWN_LIMIT": "0",
+                }),
+            ],
+        },
+    },
+    "drs.ini": {
+        "DRS": {
+            "F1-style (track DRS zones)": [
+                ("HEADER", {"VERSION": "1"}),
+                # WING_1 must match the movable wing's index in aero.ini
+                ("WING_1", {"MODE": "ANGLE", "EFFECT": "0.1", "ANGLE": "0"}),
+                ("DEACTIVATION", {"LIMIT_G": "6.9"}),
+            ],
+            "Road car (usable anywhere)": [
+                ("HEADER", {"VERSION": "1"}),
+                ("WING_1", {"MODE": "EFFECT", "EFFECT": "0.1",
+                            "ANGLE": "0"}),
+                ("DRS_ZONES", {"IGNORE_ZONES": "1"}),
+                ("DEACTIVATION", {"LIMIT_G": "6.9"}),
+            ],
+        },
+    },
+    "wing_animations.ini": {
+        "Wing Animation": {
+            "DRS flap animation": [
+                ("HEADER", {"VERSION": "2"}),
+                ("ANIMATION_#", {"WING": "1", "FILE": "wing_rear.ksanim",
+                                 "MIN": "0", "MAX": "16"}),
             ],
         },
     },

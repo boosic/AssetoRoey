@@ -441,8 +441,8 @@ class NewProjectDialog(tk.Toplevel):
 
         self.bind("<Return>", lambda e: self._create())
         self.bind("<Escape>", lambda e: self.destroy())
+        self.wait_visibility()      # grab before mapping fails on some X11
         self.grab_set()
-        self.wait_visibility()
         self.focus_set()
 
     def _browse(self):
