@@ -24,6 +24,9 @@ from string import Template
 from templates import (
     CONFIG_TEMPLATES,
     LUT_FILES,
+    MINIMAL_CONFIG_FILES,
+    MINIMAL_LUT_FILES,
+    MINIMAL_PLACEHOLDER_FILES,
     PLACEHOLDER_FILES,
     REQUIRED_DIRS,
     build_ui_car_json,
@@ -47,8 +50,13 @@ def generate_car_project(location: Path | str, car_id: str, *,
                          brand: str = "Unknown",
                          author: str = "AC Mod Studio",
                          year: int = 2026,
-                         overwrite: bool = False) -> Path:
-    """Create ``<location>/<car_id>`` with the full AC car mod skeleton.
+                         overwrite: bool = False,
+                         minimal: bool = False) -> Path:
+    """Create ``<location>/<car_id>`` with the AC car mod skeleton.
+
+    With ``minimal=True`` only the files the sim needs to load and drive
+    the car are generated (no setup screen, driver aids, shadows, badges,
+    or DRS/animation stubs).
 
     Existing files are never overwritten (missing ones are added), so it is
     safe to re-run over a project when ``overwrite=True`` is passed for an
@@ -77,12 +85,18 @@ def generate_car_project(location: Path | str, car_id: str, *,
 
     # 2. mandatory binary-asset placeholders (3D models, audio, images) ----
     for rel_path, content in PLACEHOLDER_FILES.items():
+        if minimal and rel_path not in MINIMAL_PLACEHOLDER_FILES:
+            continue
         write(rel_path, _render(content, mapping))
 
     # 3. physics configuration templates + lookup tables -------------------
     for filename, content in CONFIG_TEMPLATES.items():
+        if minimal and filename not in MINIMAL_CONFIG_FILES:
+            continue
         write(f"data/{filename}", _render(content, mapping))
     for filename, content in LUT_FILES.items():
+        if minimal and filename not in MINIMAL_LUT_FILES:
+            continue
         write(f"data/{filename}", content)
 
     # 4. UI JSON files ------------------------------------------------------
@@ -90,8 +104,9 @@ def generate_car_project(location: Path | str, car_id: str, *,
           json.dumps(build_ui_car_json(car_id, screen_name, brand,
                                        author=author, year=year),
                      indent=2, ensure_ascii=False) + "\n")
-    write("skins/00_default/ui_skin.json",
-          json.dumps(build_ui_skin_json("Default"), indent=2,
-                     ensure_ascii=False) + "\n")
+    if not minimal:
+        write("skins/00_default/ui_skin.json",
+              json.dumps(build_ui_skin_json("Default"), indent=2,
+                         ensure_ascii=False) + "\n")
 
     return root

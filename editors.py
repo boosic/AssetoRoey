@@ -22,10 +22,12 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 from templates import (
+    ALL_SUSPENSION_TYPE_KEYS,
     SLIDER_HINTS,
     SLIDER_INT_KEYS,
     SUSPENSION_TYPES,
     SUSPENSION_TYPE_DEFAULTS,
+    axle_link_default,
 )
 
 MONO_FONT = ("Consolas", 10)
@@ -451,6 +453,258 @@ class RawTextEditor(BaseEditor):
 
 
 # ---------------------------------------------------------------------------
+#  LUT editor — live graph + raw text
+# ---------------------------------------------------------------------------
+
+def _parse_lut(text: str) -> tuple[list[tuple[float, float]], list[str]]:
+    """Parse ``input|output`` lines. Returns (points, warnings)."""
+    points: list[tuple[float, float]] = []
+    warnings: list[str] = []
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith(_COMMENT_MARKS):
+            continue
+        left, sep, right = line.partition("|")
+        if not sep:
+            warnings.append(f"line {lineno}: no '|' separator")
+            continue
+        try:
+            x, y = float(left.strip()), float(right.strip())
+        except ValueError:
+            warnings.append(f"line {lineno}: not numeric")
+            continue
+        # inf/nan (or absurd magnitudes) would blow up the axis math
+        if not all(math.isfinite(v) and abs(v) <= 1e15 for v in (x, y)):
+            warnings.append(f"line {lineno}: value out of plottable range")
+            continue
+        points.append((x, y))
+    if any(points[i][0] >= points[i + 1][0] for i in range(len(points) - 1)):
+        warnings.append("⚠ inputs are not strictly ascending — AC "
+                        "interpolation expects ascending inputs")
+    return points, warnings
+
+
+def _tick_step(span: float) -> float:
+    """A 'nice' tick step producing ~5 divisions."""
+    if span <= 0 or not math.isfinite(span):
+        return 1.0
+    raw = span / 5
+    mag = 10.0 ** math.floor(math.log10(raw))
+    for mult in (1, 2, 2.5, 5, 10):
+        if mult * mag >= raw:
+            return mult * mag
+    return 10 * mag
+
+
+class LutEditor(BaseEditor):
+    """Editor for AC .lut lookup tables: a live line graph of the
+    ``input|output`` points next to the editable raw text."""
+
+    PAD_L, PAD_R, PAD_T, PAD_B = 58, 18, 16, 34
+
+    def __init__(self, master, path: Path, app):
+        super().__init__(master, path, app)
+        self._build_toolbar()
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill="both", expand=True)
+
+        graph_tab = ttk.Frame(self.notebook)
+        self.notebook.add(graph_tab, text="  Graph  ")
+        self.canvas = tk.Canvas(graph_tab, highlightthickness=0,
+                                borderwidth=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.info_var = tk.StringVar()
+        ttk.Label(graph_tab, textvariable=self.info_var,
+                  style="Muted.TLabel", padding=(8, 3)).pack(
+            side="bottom", fill="x")
+
+        raw_host = ttk.Frame(self.notebook)
+        self.notebook.add(raw_host, text="  Raw Text  ")
+        wrapper = self._make_text(raw_host)
+        wrapper.pack(fill="both", expand=True)
+        self.text = wrapper.text
+
+        content, self.encoding = read_text_any(self.path)
+        self.text.insert("1.0", content)
+        self.text.edit_reset()
+        self.text.edit_modified(False)
+        self.text.bind("<<Modified>>", self._on_modified)
+
+        self.points: list[tuple[float, float]] = []
+        self.warnings: list[str] = []
+        self._pending_refresh = None
+        self._hover_index = None
+
+        self.canvas.bind("<Configure>", lambda e: self._redraw())
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<Leave>", lambda e: self._set_hover(None))
+        self.notebook.bind("<<NotebookTabChanged>>",
+                           lambda e: self._redraw())
+        self.app.theme.register_redraw(self.canvas, self._redraw)
+        self._refresh_from_text()
+
+    # -- text plumbing ------------------------------------------------------
+    def _on_modified(self, _event=None):
+        if not self.text.edit_modified():
+            return
+        self.text.edit_modified(False)
+        self.mark_dirty()
+        if self._pending_refresh is not None:
+            self.after_cancel(self._pending_refresh)
+        self._pending_refresh = self.after(300, self._refresh_from_text)
+
+    def _refresh_from_text(self):
+        self._pending_refresh = None
+        self.points, self.warnings = _parse_lut(
+            self.text.get("1.0", "end-1c"))
+        self._hover_index = None
+        self._redraw()
+
+    def save(self) -> bool:
+        if not self._write_to_disk(self.text.get("1.0", "end-1c")):
+            return False
+        self.mark_clean()
+        self.app.set_status(f"Saved {self.path.name}")
+        return True
+
+    # -- drawing ------------------------------------------------------------
+    def _bounds(self):
+        xs = [p[0] for p in self.points]
+        ys = [p[1] for p in self.points]
+        xmin, xmax = min(xs), max(xs)
+        ymin, ymax = min(ys), max(ys)
+        if xmax - xmin <= 0:
+            xmin, xmax = xmin - 1, xmax + 1
+        if ymax - ymin <= 0:
+            ymin, ymax = ymin - 1, ymax + 1
+        return xmin, xmax, ymin, ymax
+
+    def _to_px(self, x, y, geo):
+        xmin, xmax, ymin, ymax, w, h = geo
+        px = self.PAD_L + (x - xmin) / (xmax - xmin) * \
+            (w - self.PAD_L - self.PAD_R)
+        py = h - self.PAD_B - (y - ymin) / (ymax - ymin) * \
+            (h - self.PAD_T - self.PAD_B)
+        return px, py
+
+    def _geo(self):
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        if w < 80 or h < 60:
+            return None
+        xmin, xmax, ymin, ymax = self._bounds()
+        return (xmin, xmax, ymin, ymax, w, h)
+
+    def _redraw(self):
+        c = self.canvas
+        if not c.winfo_exists():
+            return
+        p = self.app.theme.palette()
+        c.configure(background=p["field"])
+        c.delete("all")
+        info = f"{len(self.points)} points"
+        if not self.points:
+            c.create_text(c.winfo_width() // 2 or 100, 40,
+                          text="No data points — add input|output lines in "
+                               "the Raw Text tab",
+                          fill=p["muted"], anchor="center")
+            self.info_var.set("  ".join([info] + self.warnings))
+            return
+        geo = self._geo()
+        if geo is None:
+            return
+        xmin, xmax, ymin, ymax, w, h = geo
+
+        # grid + tick labels
+        for step, lo, hi, vertical in (
+                (_tick_step(xmax - xmin), xmin, xmax, True),
+                (_tick_step(ymax - ymin), ymin, ymax, False)):
+            tick = math.ceil(lo / step) * step
+            guard = 0
+            while tick <= hi + step * 1e-9 and (guard := guard + 1) < 400:
+                if vertical:
+                    px, _ = self._to_px(tick, ymin, geo)
+                    c.create_line(px, self.PAD_T, px, h - self.PAD_B,
+                                  fill=p["trough"])
+                    c.create_text(px, h - self.PAD_B + 12,
+                                  text=_fmt_num(tick), fill=p["muted"],
+                                  font=("TkDefaultFont", 8))
+                else:
+                    _, py = self._to_px(xmin, tick, geo)
+                    c.create_line(self.PAD_L, py, w - self.PAD_R, py,
+                                  fill=p["trough"])
+                    c.create_text(self.PAD_L - 8, py, text=_fmt_num(tick),
+                                  fill=p["muted"], anchor="e",
+                                  font=("TkDefaultFont", 8))
+                tick += step
+        # zero axis emphasis
+        if ymin < 0 < ymax:
+            _, py = self._to_px(xmin, 0, geo)
+            c.create_line(self.PAD_L, py, w - self.PAD_R, py,
+                          fill=p["muted"])
+        c.create_rectangle(self.PAD_L, self.PAD_T, w - self.PAD_R,
+                           h - self.PAD_B, outline=p["border"])
+
+        # polyline + markers
+        pixels = [self._to_px(x, y, geo) for x, y in self.points]
+        if len(pixels) > 1:
+            c.create_line(*[v for px in pixels for v in px],
+                          fill=p["accent"], width=2)
+        for px, py in pixels:
+            c.create_oval(px - 3, py - 3, px + 3, py + 3,
+                          fill=p["accent"], outline=p["field"])
+
+        self._draw_hover(geo)
+        rng = (f"X {_fmt_num(xmin)} … {_fmt_num(xmax)}   "
+               f"Y {_fmt_num(ymin)} … {_fmt_num(ymax)}")
+        self.info_var.set("   ".join([info, rng] + self.warnings))
+
+    # -- hover readout ------------------------------------------------------
+    def _on_motion(self, event):
+        geo = self._geo()
+        if geo is None or not self.points:
+            return
+        best, best_d = None, 196.0    # 14px radius
+        for i, (x, y) in enumerate(self.points):
+            px, py = self._to_px(x, y, geo)
+            d = (px - event.x) ** 2 + (py - event.y) ** 2
+            if d < best_d:
+                best, best_d = i, d
+        self._set_hover(best)
+
+    def _set_hover(self, index):
+        if index == self._hover_index:
+            return
+        self._hover_index = index
+        geo = self._geo()
+        if geo is not None:
+            self._draw_hover(geo)
+
+    def _draw_hover(self, geo):
+        c = self.canvas
+        c.delete("hover")
+        if self._hover_index is None or \
+                self._hover_index >= len(self.points):
+            return
+        p = self.app.theme.palette()
+        x, y = self.points[self._hover_index]
+        px, py = self._to_px(x, y, geo)
+        c.create_oval(px - 5, py - 5, px + 5, py + 5, outline=p["accent"],
+                      width=2, tags="hover")
+        label = f"{_fmt_num(x)} | {_fmt_num(y)}"
+        tx = min(max(px + 10, self.PAD_L + 30), geo[4] - self.PAD_R - 40)
+        ty = max(py - 14, self.PAD_T + 8)
+        text_id = c.create_text(tx, ty, text=label, fill=p["fg"],
+                                anchor="w", tags="hover",
+                                font=("TkDefaultFont", 9, "bold"))
+        box = c.bbox(text_id)
+        rect = c.create_rectangle(box[0] - 4, box[1] - 2, box[2] + 4,
+                                  box[3] + 2, fill=p["panel"],
+                                  outline=p["border"], tags="hover")
+        c.tag_raise(text_id, rect)
+
+
+# ---------------------------------------------------------------------------
 #  Configuration editor — Visual + Raw Text notebook
 # ---------------------------------------------------------------------------
 
@@ -603,35 +857,196 @@ class ConfigEditor(BaseEditor):
         for child in self.visual_tab.interior.winfo_children():
             child.destroy()
         self._rows.clear()
+        self._vector_vars = {}
         host = self.visual_tab.interior
         host.columnconfigure(0, weight=1)
         for row, sec in enumerate(self.doc.sections):
-            box = ttk.LabelFrame(host, text=f" [{sec.name}] ", padding=(10, 6))
-            box.grid(row=row, column=0, sticky="ew", padx=10, pady=(8, 2))
+            box = self._make_section_box(host, sec, row)
             self._build_section_body(sec, box)
         if not self.doc.sections:
             ttk.Label(host, text="No [SECTION] blocks found — use the Raw Text "
-                                 "tab to start one.",
+                                 "tab or ' ADD COMPONENT ▾' to start one.",
                       style="Muted.TLabel").grid(padx=14, pady=14)
         self.visual_tab._on_interior_configure()
 
+    def _make_section_box(self, host, sec: Section, row: int) -> ttk.Frame:
+        """Bordered section box whose header carries a small ⋮ options menu."""
+        head = ttk.Frame(host)
+        title = ttk.Label(head, text=f"[{sec.name}]", style="Title.TLabel")
+        title.pack(side="left")
+        dots = ttk.Button(head, text="⋮", width=2, style="Toolbutton")
+        dots.configure(command=lambda: self._post_section_menu(sec, dots))
+        dots.pack(side="left", padx=(6, 0))
+        box = ttk.LabelFrame(host, labelwidget=head, padding=(10, 6))
+        box.grid(row=row, column=0, sticky="ew", padx=10, pady=(8, 2))
+        self._attach_context(box, sec, None)
+        self._attach_context(title, sec, None)
+        return box
+
     def _build_section_body(self, sec: Section, box: ttk.Frame):
-        """Default layout: clean 2-column grid of key labels + value entries."""
+        """Default layout: clean 2-column grid of key labels + value entries.
+        3-component numeric values render as labelled X/Y/Z fields."""
         box.columnconfigure(1, weight=1)
         r = 0
         for entry in sec.kv_entries():
-            ttk.Label(box, text=entry.key).grid(
-                row=r, column=0, sticky="w", padx=(2, 12), pady=2)
-            var = tk.StringVar(value=entry.value)
-            widget = ttk.Entry(box, textvariable=var)
-            widget.grid(row=r, column=1, sticky="ew", pady=2)
-            self._bind_var(var, entry)
+            label = ttk.Label(box, text=entry.key)
+            label.grid(row=r, column=0, sticky="w", padx=(2, 12), pady=2)
+            self._attach_context(label, sec, entry)
+            if self._vector_parts(entry.value):
+                self._build_vector_row(box, r, sec, entry)
+            else:
+                var = tk.StringVar(value=entry.value)
+                widget = ttk.Entry(box, textvariable=var)
+                widget.grid(row=r, column=1, sticky="ew", pady=2)
+                self._bind_var(var, entry)
+                self._attach_context(widget, sec, entry)
             if entry.comment:
                 r += 1
-                ttk.Label(box, text=entry.comment.lstrip(";/# ").strip(),
+                ttk.Label(box, text=entry.comment.lstrip(";/ ").strip(),
                           style="Muted.TLabel").grid(
                     row=r, column=1, sticky="w", padx=2)
             r += 1
+
+    # ------------------------------------------------------ vector values
+    @staticmethod
+    def _vector_parts(value: str):
+        """Return ['x','y','z'] when the value is a 3-component numeric
+        vector, else None."""
+        parts = [p.strip() for p in value.split(",")]
+        if len(parts) != 3:
+            return None
+        for p in parts:
+            try:
+                float(p)
+            except ValueError:
+                return None
+        return parts
+
+    def _build_vector_row(self, box, r: int, sec: Section, entry: Entry,
+                          column: int = 1, span: int = 1):
+        parts = self._vector_parts(entry.value)
+        holder = ttk.Frame(box)
+        holder.grid(row=r, column=column, columnspan=span, sticky="w", pady=2)
+        axis_vars: list[tk.StringVar] = []
+        for i, (axis, part) in enumerate(zip("XYZ", parts)):
+            ttk.Label(holder, text=axis, style="Muted.TLabel").pack(
+                side="left", padx=((0 if i == 0 else 10), 3))
+            var = tk.StringVar(value=part)
+            axis_vars.append(var)
+            field = ttk.Entry(holder, textvariable=var, width=10)
+            field.pack(side="left")
+            self._attach_context(field, sec, entry)
+        self._rows.extend(axis_vars)
+        # introspection hook (tests/tooling): axis vars by (SECTION, KEY)
+        self._vector_vars[(sec.name.upper(), entry.key.upper())] = axis_vars
+
+        def on_write(*_):
+            entry.value = ",".join(
+                v.get().replace("\n", " ").replace("\r", " ").strip()
+                for v in axis_vars)
+            self.mark_dirty()
+            self._schedule_raw_sync()
+        for var in axis_vars:
+            var.trace_add("write", on_write)
+
+    # --------------------------------------------- row / section options menu
+    def _attach_context(self, widget, sec: Section, entry: Entry | None):
+        widget.bind("<Button-3>", lambda e: self._post_menu(
+            self._build_options_menu(sec, entry), e.x_root, e.y_root))
+
+    def _post_section_menu(self, sec: Section, button):
+        self._post_menu(self._build_options_menu(sec, None),
+                        button.winfo_rootx(),
+                        button.winfo_rooty() + button.winfo_height())
+
+    def _post_menu(self, menu: tk.Menu, x_root: int, y_root: int):
+        try:
+            menu.tk_popup(x_root, y_root)
+        finally:
+            menu.grab_release()
+
+    def _build_options_menu(self, sec: Section, entry: Entry | None) -> tk.Menu:
+        """Small options menu (right-click on a row, or the ⋮ button on a
+        section box). One reusable Menu per editor, repopulated per post —
+        add future actions here."""
+        menu = getattr(self, "_options_menu", None)
+        if menu is None or not menu.winfo_exists():
+            menu = self._options_menu = tk.Menu(self, tearoff=0)
+            self.app.theme.register_menu(menu)
+        menu.delete(0, "end")
+        if entry is not None:
+            menu.add_command(
+                label=f"Remove  {entry.key}",
+                command=lambda: self.remove_key(sec, entry))
+            menu.add_separator()
+        menu.add_command(
+            label=f"Add key to [{sec.name}]…",
+            command=lambda: self._add_key_dialog(sec))
+        menu.add_separator()
+        menu.add_command(
+            label=f"Remove section [{sec.name}]",
+            command=lambda: self.remove_section(sec))
+        return menu
+
+    def _refresh_after_model_change(self, status: str | None = None):
+        self.rebuild_visual()
+        self._sync_raw_from_doc()
+        self.mark_dirty()
+        if status:
+            self.app.set_status(status)
+
+    def remove_key(self, sec: Section, entry: Entry):
+        try:
+            sec.entries.remove(entry)
+        except ValueError:
+            return
+        self._refresh_after_model_change(
+            f"Removed {entry.key} from [{sec.name}]  (unsaved)")
+
+    def remove_section(self, sec: Section):
+        if sec in self.doc.sections:
+            self.doc.sections.remove(sec)
+            self._refresh_after_model_change(
+                f"Removed section [{sec.name}]  (unsaved)")
+
+    def _add_key_dialog(self, sec: Section):
+        dlg = tk.Toplevel(self)
+        dlg.title(f"Add key to [{sec.name}]")
+        dlg.configure(bg=self.app.theme.palette()["bg"])
+        dlg.transient(self.winfo_toplevel())
+        dlg.resizable(False, False)
+        frame = ttk.Frame(dlg, padding=14)
+        frame.pack(fill="both", expand=True)
+        key_var, val_var = tk.StringVar(), tk.StringVar()
+        ttk.Label(frame, text="Key").grid(row=0, column=0, sticky="w",
+                                          padx=(0, 10), pady=3)
+        key_entry = ttk.Entry(frame, textvariable=key_var, width=26)
+        key_entry.grid(row=0, column=1, pady=3)
+        ttk.Label(frame, text="Value").grid(row=1, column=0, sticky="w",
+                                            padx=(0, 10), pady=3)
+        ttk.Entry(frame, textvariable=val_var, width=26).grid(
+            row=1, column=1, pady=3)
+
+        def ok(_event=None):
+            key = key_var.get().strip().upper().replace(" ", "_")
+            if not key:
+                return
+            sec.set(key, val_var.get().strip())
+            dlg.destroy()
+            self._refresh_after_model_change(
+                f"Added {key} to [{sec.name}]  (unsaved)")
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=2, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(buttons, text="Cancel",
+                   command=dlg.destroy).pack(side="right", padx=(8, 0))
+        ttk.Button(buttons, text="Add", style="Accent.TButton",
+                   command=ok).pack(side="right")
+        dlg.bind("<Return>", ok)
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        dlg.wait_visibility()
+        dlg.grab_set()
+        key_entry.focus_set()
 
     def _bind_var(self, var: tk.StringVar, entry: Entry):
         # Keep a hard reference: a StringVar only referenced from closures is
@@ -651,10 +1066,14 @@ class ConfigEditor(BaseEditor):
 # ---------------------------------------------------------------------------
 
 class _SliderRow:
-    """2-way binding between one Entry and one Scale, loop-protected."""
+    """2-way binding between one Entry and one Scale, loop-protected.
+
+    ``on_commit`` (optional) fires when the user finishes an interaction —
+    slider release, Enter, or leaving the field — for values that trigger
+    structural updates (e.g. LINK_COUNT re-generating axle links)."""
 
     def __init__(self, editor: "SuspensionEditor", box, row: int,
-                 entry: Entry, sec: Section):
+                 entry: Entry, sec: Section, on_commit=None):
         self.editor = editor
         self.entry = entry
         self._guard = False
@@ -663,8 +1082,8 @@ class _SliderRow:
         lo, hi = editor.slider_range(sec.name, entry.key, value)
         self.var = tk.StringVar(value=entry.value)
 
-        ttk.Label(box, text=entry.key).grid(
-            row=row, column=0, sticky="w", padx=(2, 12), pady=3)
+        self.label = ttk.Label(box, text=entry.key)
+        self.label.grid(row=row, column=0, sticky="w", padx=(2, 12), pady=3)
         self.field = ttk.Entry(box, textvariable=self.var, width=12)
         self.field.grid(row=row, column=1, sticky="w", pady=3)
         self.scale = ttk.Scale(box, orient="horizontal", from_=lo, to=hi,
@@ -679,6 +1098,10 @@ class _SliderRow:
             self.scale.set(value)
             self._guard = False
         self.var.trace_add("write", self._on_typed)
+        if on_commit is not None:
+            self.scale.bind("<ButtonRelease-1>", lambda e: on_commit())
+            self.field.bind("<Return>", lambda e: on_commit())
+            self.field.bind("<FocusOut>", lambda e: on_commit())
 
     @staticmethod
     def _bounds_text(lo, hi):
@@ -734,33 +1157,56 @@ class SuspensionEditor(ConfigEditor):
     """Specialised editor for suspensions.ini.
 
     * ``TYPE`` keys render as a dropdown of the standard AC suspension types;
-      choosing one injects that geometry's default sub-option keys.
-    * Numeric values get an interactive slider with 2-way binding.
+      switching type removes the old type's geometry keys, injects the new
+      type's, and manages the auxiliary [AXLE] section. Removed values are
+      stashed (per project, until the project is closed) and restored when
+      switching back.
+    * ``LINK_COUNT`` in [AXLE] regenerates the J{i}_CAR/J{i}_AXLE link pairs.
+    * Numeric values get an interactive slider with 2-way binding; vector
+      values get X/Y/Z fields.
     """
+
+    _axle_sync_guard = False
 
     def _build_section_body(self, sec: Section, box: ttk.Frame):
         box.columnconfigure(2, weight=1)
+        is_axle_box = sec.name.upper() == "AXLE"
         r = 0
         for entry in sec.kv_entries():
             if entry.key.upper() == "TYPE":
                 r = self._build_type_row(sec, box, r, entry)
-            elif _as_float(entry.value) is not None:
-                self._rows.append(_SliderRow(self, box, r, entry, sec))
-                r += 1
+                continue
+            if _as_float(entry.value) is not None:
+                on_commit = None
+                if is_axle_box and entry.key.upper() == "LINK_COUNT":
+                    on_commit = lambda s=sec: self._sync_axle_links(s)
+                row = _SliderRow(self, box, r, entry, sec,
+                                 on_commit=on_commit)
+                self._rows.append(row)
+                self._attach_context(row.label, sec, entry)
+                self._attach_context(row.field, sec, entry)
+            elif self._vector_parts(entry.value):
+                label = ttk.Label(box, text=entry.key)
+                label.grid(row=r, column=0, sticky="w", padx=(2, 12), pady=3)
+                self._attach_context(label, sec, entry)
+                self._build_vector_row(box, r, sec, entry, column=1, span=3)
             else:
-                ttk.Label(box, text=entry.key).grid(
-                    row=r, column=0, sticky="w", padx=(2, 12), pady=3)
+                label = ttk.Label(box, text=entry.key)
+                label.grid(row=r, column=0, sticky="w", padx=(2, 12), pady=3)
+                self._attach_context(label, sec, entry)
                 var = tk.StringVar(value=entry.value)
-                ttk.Entry(box, textvariable=var).grid(
-                    row=r, column=1, columnspan=3, sticky="ew", pady=3,
-                    padx=(0, 4))
+                field = ttk.Entry(box, textvariable=var)
+                field.grid(row=r, column=1, columnspan=3, sticky="ew",
+                           pady=3, padx=(0, 4))
                 self._bind_var(var, entry)
-                r += 1
+                self._attach_context(field, sec, entry)
+            r += 1
 
     # -- TYPE dropdown -------------------------------------------------------
     def _build_type_row(self, sec: Section, box, r: int, entry: Entry) -> int:
-        ttk.Label(box, text=entry.key).grid(
-            row=r, column=0, sticky="w", padx=(2, 12), pady=3)
+        label = ttk.Label(box, text=entry.key)
+        label.grid(row=r, column=0, sticky="w", padx=(2, 12), pady=3)
+        self._attach_context(label, sec, entry)
         var = tk.StringVar(value=entry.value)
         self._rows.append(var)
         values = list(SUSPENSION_TYPES)
@@ -783,20 +1229,18 @@ class SuspensionEditor(ConfigEditor):
         hint.grid(row=r, column=2, columnspan=2, sticky="w", padx=(10, 2))
 
         def on_pick(_event=None):
-            entry.value = var.get()
-            self.mark_dirty()
-            added = self._apply_type_defaults(sec, var.get())
+            new_type = var.get()
+            if new_type.upper() == entry.value.strip().upper():
+                return
+            entry.value = new_type
+            added, removed = self._switch_type(sec, entry, new_type)
+            parts = [f"[{sec.name}] TYPE={new_type}"]
             if added:
-                # Sub-option keys were injected → the grid must be rebuilt.
-                self.rebuild_visual()
-                self._sync_raw_from_doc()
-                self.app.set_status(
-                    f"[{sec.name}] TYPE={var.get()} — added default sub-options: "
-                    + ", ".join(added))
-            else:
-                hint.configure(text=self._type_hint(var.get()))
-                self._schedule_raw_sync()
-                self.app.set_status(f"[{sec.name}] TYPE={var.get()}")
+                parts.append("added: " + ", ".join(added))
+            if removed:
+                parts.append("removed (restorable until the project is "
+                             "closed): " + ", ".join(removed))
+            self._refresh_after_model_change("  —  ".join(parts))
         combo.bind("<<ComboboxSelected>>", on_pick)
         return r + 1
 
@@ -805,30 +1249,162 @@ class SuspensionEditor(ConfigEditor):
         spec = SUSPENSION_TYPE_DEFAULTS.get(type_name.upper())
         return spec.get("hint", "") if spec else ""
 
-    def _apply_type_defaults(self, sec: Section, type_name: str) -> list[str]:
-        """Inject the missing geometry keys for the selected suspension type.
-        Existing keys are never overwritten. Returns the added key names."""
-        spec = SUSPENSION_TYPE_DEFAULTS.get(type_name.upper())
-        if not spec:
-            return []
+    # ----------------------------------------------------- type switching
+    def _stash(self) -> dict:
+        """Per-project stash of removed keys/sections, held on the app so it
+        survives tab close and save — cleared when the project is closed."""
+        store = getattr(self.app, "type_stash", None)
+        if store is None:
+            store = self.app.type_stash = {}
+        try:
+            file_key = str(self.path.resolve())
+        except OSError:
+            file_key = str(self.path)
+        return store.setdefault(file_key, {})
+
+    def _switch_type(self, sec: Section, type_entry: Entry,
+                     new_type: str) -> tuple[list[str], list[str]]:
+        """Swap [sec] to the new suspension type: remove keys owned by other
+        types (stashing their values), insert the new type's keys (restoring
+        stashed values over defaults), and create/remove the [AXLE] helper
+        section as needed. Returns (added, removed) names."""
+        new_type = new_type.strip().upper()
+        stash = self._stash()
+        spec = SUSPENSION_TYPE_DEFAULTS.get(new_type, {})
+        keep = {k.upper() for k in spec.get("keys", {})}
         added: list[str] = []
-        for key, value in spec.get("keys", {}).items():
-            if not sec.has(key):
-                sec.set(key, str(value))
-                added.append(key)
-        for sec_name, keys in spec.get("sections", {}).items():
-            target = self.doc.section(sec_name)
-            if target is None:
-                target = self.doc.add_section(sec_name)
-                for key, value in keys.items():
-                    target.set(key, str(value))
-                added.append(f"[{sec_name}]")
+        removed: list[str] = []
+
+        # 1. remove geometry keys the new type does not use
+        for e in list(sec.kv_entries()):
+            key_u = e.key.upper()
+            if key_u in ALL_SUSPENSION_TYPE_KEYS and key_u not in keep:
+                stash[("KEY", sec.name.upper(), key_u)] = \
+                    (e.key, e.value, e.comment)
+                sec.entries.remove(e)
+                removed.append(e.key)
+
+        # 2. insert the new type's keys right after TYPE, stash values first
+        try:
+            insert_at = sec.entries.index(type_entry) + 1
+        except ValueError:
+            insert_at = len(sec.entries)
+        for key, default in spec.get("keys", {}).items():
+            if sec.has(key):
+                continue
+            stashed = stash.pop(("KEY", sec.name.upper(), key.upper()), None)
+            if stashed is not None:
+                e = Entry("kv", stashed[0], stashed[1], stashed[2])
             else:
+                e = Entry("kv", key, str(default))
+            sec.entries.insert(insert_at, e)
+            insert_at += 1
+            added.append(key)
+
+        # 3. auxiliary sections (the [AXLE] link definition)
+        for name, keys in spec.get("sections", {}).items():
+            if self.doc.section(name) is not None:
+                continue
+            pos = self.doc.sections.index(sec) + 1
+            stashed_sec = stash.pop(("SECTION", name.upper()), None)
+            if stashed_sec is not None:
+                self.doc.sections.insert(pos, stashed_sec)
+            else:
+                new_sec = Section(name)
                 for key, value in keys.items():
-                    if not target.has(key):
-                        target.set(key, str(value))
-                        added.append(f"[{sec_name}] {key}")
-        return added
+                    new_sec.set(key, str(value))
+                self.doc.sections.insert(pos, new_sec)
+            added.append(f"[{name}]")
+
+        # 4. drop [AXLE] once no axle uses TYPE=AXLE any more
+        if new_type != "AXLE":
+            still_used = any(
+                s.get("TYPE", "").strip().upper() == "AXLE"
+                for s in self.doc.sections)
+            axle_sec = self.doc.section("AXLE")
+            if axle_sec is not None and not still_used:
+                stash[("SECTION", "AXLE")] = axle_sec
+                self.doc.sections.remove(axle_sec)
+                removed.append("[AXLE]")
+        return added, removed
+
+    # ------------------------------------------------- axle link management
+    def _sync_axle_links(self, sec: Section):
+        """Make the J{i}_CAR/J{i}_AXLE pairs in [AXLE] match LINK_COUNT.
+        Extra links are stashed; restored links get their stashed values."""
+        if self._axle_sync_guard:
+            return
+        count = _as_float(sec.get("LINK_COUNT", ""))
+        if count is None:
+            return
+        n = max(1, min(int(round(count)), 8))
+        stash = self._stash()
+        j_re = re.compile(r"J(\d+)_(CAR|AXLE)", re.IGNORECASE)
+
+        lc_entry = next((e for e in sec.kv_entries()
+                         if e.key.upper() == "LINK_COUNT"), None)
+        if lc_entry is None:
+            return
+
+        # Pre-check: is any change actually needed? A plain slider click or
+        # tab-through must not silently re-splice (reorder) the section.
+        present = {(int(m.group(1)), m.group(2).upper())
+                   for e in sec.kv_entries()
+                   if (m := j_re.fullmatch(e.key))}
+        wanted = {(i, suffix) for i in range(n)
+                  for suffix in ("CAR", "AXLE")}
+        if present == wanted and lc_entry.value.strip() == str(n):
+            return
+        if present == wanted:       # only LINK_COUNT itself needs normalising
+            lc_entry.value = str(n)
+            self._refresh_after_model_change(f"[{sec.name}] LINK_COUNT={n}")
+            return
+
+        existing: dict[tuple[int, str], Entry] = {}
+        for e in list(sec.kv_entries()):
+            m = j_re.fullmatch(e.key)
+            if m:
+                existing[(int(m.group(1)), m.group(2).upper())] = e
+                sec.entries.remove(e)
+
+        added, removed = [], []
+        block: list[Entry] = []
+        for i in range(n):
+            for suffix in ("CAR", "AXLE"):
+                e = existing.pop((i, suffix), None)
+                if e is None:
+                    key = f"J{i}_{suffix}"
+                    stashed = stash.pop(("KEY", sec.name.upper(), key), None)
+                    if stashed is not None:
+                        e = Entry("kv", stashed[0], stashed[1], stashed[2])
+                    else:
+                        car, axle = axle_link_default(i)
+                        e = Entry("kv", key,
+                                  car if suffix == "CAR" else axle)
+                    added.append(key)
+                block.append(e)
+        for (_i, _suffix), e in existing.items():
+            stash[("KEY", sec.name.upper(), e.key.upper())] = \
+                (e.key, e.value, e.comment)
+            removed.append(e.key)
+
+        normalized = lc_entry.value.strip() != str(n)
+        lc_entry.value = str(n)
+        idx = sec.entries.index(lc_entry) + 1
+        sec.entries[idx:idx] = block
+
+        if added or removed or normalized:
+            self._axle_sync_guard = True
+            try:
+                status = [f"[{sec.name}] LINK_COUNT={n}"]
+                if added:
+                    status.append("added: " + ", ".join(added))
+                if removed:
+                    status.append("removed (restorable): "
+                                  + ", ".join(removed))
+                self._refresh_after_model_change("  —  ".join(status))
+            finally:
+                self._axle_sync_guard = False
 
     # -- slider ranges -------------------------------------------------------
     def slider_range(self, section: str, key: str, value):

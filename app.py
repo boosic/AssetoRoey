@@ -16,7 +16,8 @@ import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from editors import BaseEditor, ConfigEditor, RawTextEditor, SuspensionEditor
+from editors import (BaseEditor, ConfigEditor, LutEditor, RawTextEditor,
+                     SuspensionEditor)
 from generator import generate_car_project, sanitize_car_id
 from templates import APP_TITLE, COMPONENT_LIBRARY
 
@@ -55,6 +56,25 @@ class ThemeManager:
         self._texts: list[tk.Text] = []
         self._menus: list[tk.Menu] = []
         self._combos: list[ttk.Combobox] = []
+        self._redraws: list[tuple] = []     # (widget, callback) pairs
+
+    def palette(self) -> dict:
+        """The active palette — for widgets that draw themselves (canvases)."""
+        return PALETTES[self.mode]
+
+    def register_redraw(self, widget, callback):
+        """Call ``callback`` after every theme change while ``widget`` lives
+        (used by canvas-drawn views like the LUT graph)."""
+        self._redraws = [(w, f) for w, f in self._redraws
+                         if self._alive(w)]
+        self._redraws.append((widget, callback))
+
+    @staticmethod
+    def _alive(widget) -> bool:
+        try:
+            return bool(widget.winfo_exists())
+        except tk.TclError:
+            return False
 
     @staticmethod
     def _prune(widgets: list) -> list:
@@ -190,6 +210,15 @@ class ThemeManager:
         self._combos = self._prune(self._combos)
         for cb in self._combos:
             self._style_combo_popdown(cb, p)
+        s.configure("Toolbutton", background=p["bg"], foreground=p["fg"],
+                    padding=(4, 0))
+        s.map("Toolbutton", background=[("active", p["tab"])])
+        self._redraws = [(w, f) for w, f in self._redraws if self._alive(w)]
+        for _w, redraw in self._redraws:
+            try:
+                redraw()
+            except tk.TclError:
+                pass
 
     @staticmethod
     def _style_text(widget: tk.Text, p: dict):
@@ -269,14 +298,18 @@ class ClosableNotebook(ttk.Notebook):
             ("active", "!disabled", "img_tab_close_active"),
             border=8, sticky="")
         style.layout("Closable.TNotebook", style.layout("TNotebook"))
+        # The close element is packed from the RIGHT and BEFORE the label:
+        # when many tabs force compression, Tk clips the last-packed element
+        # first — this way the shrinking label absorbs the squeeze and the
+        # ✕ stays visible on every tab.
         style.layout("Closable.TNotebook.Tab", [
             ("Notebook.tab", {"sticky": "nswe", "children": [
                 ("Notebook.padding", {"side": "top", "sticky": "nswe",
                                       "children": [
                     ("Notebook.focus", {"side": "top", "sticky": "nswe",
                                         "children": [
+                        ("close", {"side": "right", "sticky": ""}),
                         ("Notebook.label", {"side": "left", "sticky": ""}),
-                        ("close", {"side": "left", "sticky": ""}),
                     ]})]})]})])
 
     # -- events -------------------------------------------------------------
@@ -475,13 +508,20 @@ class NewProjectDialog(tk.Toplevel):
                 row=r, column=1, sticky="ew", pady=4)
         ttk.Button(frame, text="Browse…", command=self._browse).grid(
             row=0, column=2, padx=(6, 0))
+        self.minimal_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            frame, variable=self.minimal_var,
+            text="Minimal file set — only what the sim needs to load and "
+                 "drive the car").grid(
+            row=len(rows), column=0, columnspan=3, sticky="w", pady=(6, 2))
         ttk.Label(frame, style="Muted.TLabel",
                   text="ID is the folder name — lowercase, digits and "
                        "underscores only.").grid(
-            row=len(rows), column=0, columnspan=3, sticky="w", pady=(2, 10))
+            row=len(rows) + 1, column=0, columnspan=3, sticky="w",
+            pady=(2, 10))
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=len(rows) + 1, column=0, columnspan=3, sticky="e")
+        buttons.grid(row=len(rows) + 2, column=0, columnspan=3, sticky="e")
         ttk.Button(buttons, text="Cancel",
                    command=self.destroy).pack(side="right", padx=(8, 0))
         ttk.Button(buttons, text="Create Project", style="Accent.TButton",
@@ -529,7 +569,8 @@ class NewProjectDialog(tk.Toplevel):
         try:
             project = generate_car_project(location, car_id,
                                            screen_name=screen_name,
-                                           brand=brand, overwrite=overwrite)
+                                           brand=brand, overwrite=overwrite,
+                                           minimal=self.minimal_var.get())
         except OSError as exc:
             messagebox.showerror("New Car Project",
                                  f"Could not create the project:\n{exc}",
@@ -558,6 +599,9 @@ class ACModStudio(tk.Tk):
         self.project_root: Path | None = None
         self._editors: dict[str, BaseEditor] = {}
         self._closing: set = set()
+        # Values/sections removed by suspension type switches, kept per file
+        # until the project is closed so switching back restores them.
+        self.type_stash: dict[str, dict] = {}
 
         self.dark_var = tk.BooleanVar(
             value=self.settings.get("theme", "dark") == "dark")
@@ -670,6 +714,7 @@ class ACModStudio(tk.Tk):
         self.explorer = FileExplorer(self.paned, self)
         self.paned.add(self.explorer, weight=1)
         self.workspace = ClosableNotebook(self.paned, self.close_tab)
+        self.workspace.bind("<Button-3>", self._on_tab_context)
         self.paned.add(self.workspace, weight=4)
 
     def _build_statusbar(self):
@@ -701,6 +746,8 @@ class ACModStudio(tk.Tk):
             self.load_project(Path(chosen))
 
     def load_project(self, path: Path):
+        if self.project_root != Path(path):
+            self.type_stash = {}        # stash lives until project close
         self.project_root = Path(path)
         self.explorer.load(self.project_root)
         self.settings["last_project"] = str(self.project_root)
@@ -750,18 +797,27 @@ class ACModStudio(tk.Tk):
                 parent=self)
             return
         self._editors[key] = editor
-        self.workspace.add(editor, text=f"  {editor.display_name}  ")
+        self.workspace.add(editor, text=self._tab_text(editor))
         self.workspace.select(editor)
         self.set_status(f"Opened {path} [{type(editor).__name__}]")
 
+    @staticmethod
+    def _tab_text(editor) -> str:
+        name = editor.display_name
+        if len(name) > 22:
+            name = name[:20] + "…"
+        return f"  {name}{' ●' if editor.dirty else ''}  "
+
     def _route(self, path: Path) -> BaseEditor:
         """Routing rules: suspensions → SuspensionEditor, other .ini physics
-        files → ConfigEditor, JSON/LUT/text → RawTextEditor."""
+        files → ConfigEditor, .lut → graph editor, JSON/text → RawTextEditor."""
         name = path.name.lower()
         if name.endswith(".ini") and "suspension" in name:
             return SuspensionEditor(self.workspace, path, self)
         if name.endswith(".ini"):
             return ConfigEditor(self.workspace, path, self)
+        if name.endswith(".lut"):
+            return LutEditor(self.workspace, path, self)
         return RawTextEditor(self.workspace, path, self)
 
     def save_active(self):
@@ -771,9 +827,7 @@ class ACModStudio(tk.Tk):
 
     def on_editor_dirty_changed(self, editor: BaseEditor):
         if str(editor) in self.workspace.tabs():
-            marker = " ●" if editor.dirty else ""
-            self.workspace.tab(editor,
-                               text=f"  {editor.display_name}{marker}  ")
+            self.workspace.tab(editor, text=self._tab_text(editor))
 
     # -- tab closing --------------------------------------------------------
     def close_tab(self, index: int):
@@ -817,6 +871,50 @@ class ACModStudio(tk.Tk):
         except (KeyError, tk.TclError):
             return
         self._close_widget(widget)
+
+    def _tab_widgets(self) -> list:
+        widgets = []
+        for tab in self.workspace.tabs():
+            try:
+                widgets.append(self.nametowidget(tab))
+            except (KeyError, tk.TclError):
+                pass
+        return widgets
+
+    def close_other_tabs(self, keep):
+        for widget in self._tab_widgets():
+            if widget is not keep:
+                self._close_widget(widget)
+
+    def close_all_tabs(self):
+        for widget in self._tab_widgets():
+            self._close_widget(widget)
+
+    def _on_tab_context(self, event):
+        """Right-click on a tab: close options (a fallback that always works,
+        however many tabs are open)."""
+        try:
+            index = self.workspace.index(f"@{event.x},{event.y}")
+        except tk.TclError:
+            return
+        try:
+            widget = self.nametowidget(self.workspace.tabs()[index])
+        except (IndexError, KeyError, tk.TclError):
+            return
+        menu = getattr(self, "_tab_menu", None)
+        if menu is None or not menu.winfo_exists():
+            menu = self._tab_menu = tk.Menu(self, tearoff=0)
+            self.theme.register_menu(menu)
+        menu.delete(0, "end")
+        menu.add_command(label="Close", accelerator="Ctrl+W / middle-click",
+                         command=lambda: self._close_widget(widget))
+        menu.add_command(label="Close Others",
+                         command=lambda: self.close_other_tabs(widget))
+        menu.add_command(label="Close All", command=self.close_all_tabs)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
 
     # ----------------------------------------------------- ADD COMPONENT ▾
     def _build_component_menu(self):

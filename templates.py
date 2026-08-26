@@ -34,6 +34,31 @@ REQUIRED_DIRS = (
 )
 
 # ---------------------------------------------------------------------------
+#  Minimal file set — just enough for the sim to load and drive the car
+#  (hard-required + effectively-required files per the AC loading rules;
+#  cosmetic/optional files like setup.ini, electronics.ini, shadows, badge
+#  and logo are omitted)
+# ---------------------------------------------------------------------------
+
+MINIMAL_CONFIG_FILES = {
+    "car.ini", "engine.ini", "drivetrain.ini", "suspensions.ini",
+    "tyres.ini", "brakes.ini", "colliders.ini", "aero.ini", "lods.ini",
+    "ai.ini", "driver3d.ini",
+}
+
+MINIMAL_LUT_FILES = {
+    # every LUT the minimal .ini set references must exist or AC crashes
+    "power.lut", "wing_body_AOA_CL.lut", "wing_body_AOA_CD.lut",
+    "street_front.lut", "street_rear.lut", "tcurve_street.lut",
+}
+
+MINIMAL_PLACEHOLDER_FILES = {
+    "$car.kn5", "collider.kn5", "driver_base_pos.knh",
+    "sfx/$car.bank", "sfx/GUIDs.txt",
+    "skins/00_default/preview.jpg", "_README_PLACEHOLDERS.txt",
+}
+
+# ---------------------------------------------------------------------------
 #  Placeholder text for mandatory binary files
 # ---------------------------------------------------------------------------
 
@@ -1130,6 +1155,31 @@ SLIDER_INT_KEYS = {
     "COUNT", "USE_LOAD", "INDEX",
 }
 
+# Every key that belongs to SOME suspension type's geometry. When the TYPE
+# of an axle changes, keys in this set that the new type does not own are
+# removed (and stashed for restore).
+ALL_SUSPENSION_TYPE_KEYS = {
+    key for spec in SUSPENSION_TYPE_DEFAULTS.values()
+    for key in spec.get("keys", {})
+}
+
+
+def axle_link_default(i: int) -> tuple[str, str]:
+    """Default (J{i}_CAR, J{i}_AXLE) vectors for a live-axle link. 0-3 form
+    the verified 4-link muscle-car set, 4 is a Panhard rod, further links
+    fall back to a generic trailing arm."""
+    table = {
+        0: ("0.5588,-0.127,0.5422", "0.5588,-0.127,0.0"),
+        1: ("-0.5588,-0.127,0.5422", "-0.5588,-0.127,0.0"),
+        2: ("0.2588,0.1,0.6422", "0.1288,0.127,0.0"),
+        3: ("-0.2588,0.1,0.6422", "-0.1288,0.127,0.0"),
+        4: ("-0.610,-0.02,-0.1", "0.610,-0.05,-0.1"),   # Panhard rod
+    }
+    if i in table:
+        return table[i]
+    sign = "-" if i % 2 else ""
+    return (f"{sign}0.50,-0.05,0.40", f"{sign}0.50,-0.05,0.0")
+
 # Slider ranges for the suspension editor. Keyed by "SECTION/KEY" (wins) or
 # plain "KEY". Anything not listed gets a heuristic range from its value.
 SLIDER_HINTS = {
@@ -1161,7 +1211,7 @@ SLIDER_HINTS = {
     "DAMAGE/MAX_DAMAGE": (0, 0.5),
     "DAMAGE/DEBUG_LOG": (0, 1),
     "TORQUE_REACTION": (0, 1),
-    "LINK_COUNT": (2, 5),
+    "LINK_COUNT": (1, 6),
 }
 
 # ---------------------------------------------------------------------------

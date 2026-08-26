@@ -28,22 +28,38 @@ on Debian/Ubuntu: `sudo apt install python3-tk`).
   - placeholder text files for every mandatory binary asset (`.kn5` models,
     FMOD `.bank` + `GUIDs.txt`, previews, badges, blob shadows) explaining
     how to produce the real thing.
+  A **"Minimal file set"** option generates only what the sim needs to
+  load and drive the car (no setup screen, driver aids, shadows, badges or
+  DRS/animation stubs).
 - **Split-screen shell** — file-explorer tree on the left, tabbed editor
-  workspace on the right, with closable tabs, a status bar and a persisted
-  **dark mode** (Ctrl+D).
+  workspace on the right, with closable tabs (the ✕ stays visible however
+  many tabs are open; right-click a tab for Close / Close Others /
+  Close All), a status bar and a persisted **dark mode** (Ctrl+D).
 - **Visual config editor** — every `.ini` opens in a 2-tab notebook
   (*Visual* / *Raw Text*). The visual tab renders a bordered box per
   `[SECTION]` with a clean 2-column key/value grid; edits update the raw
   text live, hand-edits to the raw text flow back into the grid. Comments
   and file layout are preserved on save (Ctrl+S — nothing touches disk
-  until you save).
+  until you save). 3-component vector values render as labelled **X/Y/Z
+  fields**, and every row/section carries a small options menu
+  (right-click a row, or the ⋮ on a section box): remove a key, add a key,
+  remove a section — more actions can slot in later.
 - **Suspension tuning editor** — `suspensions.ini` opens a BeamNG-style
   editor: `TYPE` renders as a dropdown of the vanilla AC suspension types
-  (DWB, STRUT, AXLE, ML) and picking one injects that geometry's default
-  sub-option keys (wishbone pickups, strut mounts, `[AXLE]` links,
-  multilink joints). Every numeric value gets a slider with two-way
-  binding — drag to type, type to move — and typing a value beyond the
-  current limit stretches the slider range instead of clamping.
+  (DWB, STRUT, AXLE, ML). Switching type updates the file properly:
+  the old type's geometry keys are removed, the new type's are inserted,
+  and the `[AXLE]` helper section is created or dropped as needed.
+  Removed values are stashed per project until the project is closed, so
+  switching back restores your tuned numbers instead of defaults. For
+  live axles, changing `LINK_COUNT` regenerates the `J{i}_CAR`/`J{i}_AXLE`
+  link pairs (extra links are stashed too). Every numeric value gets a
+  slider with two-way binding — drag to type, type to move — typing beyond
+  the current limit stretches the slider range, and integer keys snap to
+  whole numbers.
+- **LUT graph viewer** — `.lut` lookup tables open in a 2-tab editor with
+  a live line graph (grid, tick labels, zero axis, hover readout of the
+  nearest point) next to the raw text; the plot re-renders as you type and
+  warns about malformed or non-ascending rows.
 - **ADD COMPONENT ▾** — injects Kunos-accurate template variants straight
   into the active editor's memory and refreshes the grid instantly:
   - *engine.ini*: street/race/80s-F1 turbos, twin-turbo pair, overboost
@@ -73,7 +89,8 @@ on Debian/Ubuntu: `sudo apt install python3-tk`).
 | --- | --- |
 | `suspensions.ini` (any `*suspension*.ini`) | `SuspensionEditor` |
 | any other `.ini` | `ConfigEditor` |
-| `.json`, `.lut`, `.txt`, everything else | `RawTextEditor` (with a Format-JSON button for JSON) |
+| `.lut` | `LutEditor` (live graph + raw text) |
+| `.json`, `.txt`, everything else | `RawTextEditor` (with a Format-JSON button for JSON) |
 
 Real binary files (containing NUL bytes) are refused with a hint instead of
 being opened.
