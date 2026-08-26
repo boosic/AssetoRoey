@@ -926,6 +926,18 @@ class ConfigEditor(BaseEditor):
                           style="Muted.TLabel").grid(
                     row=r, column=1, sticky="w", padx=2)
             r += 1
+        if not sec.kv_entries():
+            self._empty_section_hint(box, sec, span=2)
+
+    def _empty_section_hint(self, box, sec: Section, span: int):
+        """A keyless LabelFrame renders ~1px tall — give empty sections a
+        visible body that is also a right-click target."""
+        hint = ttk.Label(box, text="(empty section — right-click here or "
+                                   "use the ⋮ menu to add keys)",
+                         style="Muted.TLabel")
+        hint.grid(row=0, column=0, columnspan=span, sticky="w",
+                  padx=2, pady=4)
+        self._attach_context(hint, sec, None)
 
     # ------------------------------------------------------ vector values
     @staticmethod
@@ -1054,6 +1066,10 @@ class ConfigEditor(BaseEditor):
         sec = self.doc.add_section(name)
         self._refresh_after_model_change(
             f"Added section [{name}]  (unsaved)")
+        # The new section lands at the bottom of the grid — bring it on
+        # screen instead of leaving the view at the top.
+        self.update_idletasks()
+        self.visual_tab.canvas.yview_moveto(1.0)
         return sec
 
     def _add_section_dialog(self):
@@ -1089,6 +1105,7 @@ class ConfigEditor(BaseEditor):
         dlg.wait_visibility()
         dlg.grab_set()
         name_entry.focus_set()
+        self.app.sync_titlebar(dlg)
 
     def _add_key_dialog(self, sec: Section):
         dlg = tk.Toplevel(self)
@@ -1128,6 +1145,7 @@ class ConfigEditor(BaseEditor):
         dlg.wait_visibility()
         dlg.grab_set()
         key_entry.focus_set()
+        self.app.sync_titlebar(dlg)
 
     def _bind_var(self, var: tk.StringVar, entry: Entry):
         # Keep a hard reference: a StringVar only referenced from closures is
@@ -1282,6 +1300,8 @@ class SuspensionEditor(ConfigEditor):
                 self._bind_var(var, entry)
                 self._attach_context(field, sec, entry)
             r += 1
+        if not sec.kv_entries():
+            self._empty_section_hint(box, sec, span=4)
 
     # -- TYPE dropdown -------------------------------------------------------
     def _build_type_row(self, sec: Section, box, r: int, entry: Entry) -> int:

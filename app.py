@@ -27,6 +27,47 @@ from templates import (APP_TITLE, COMPONENT_LIBRARY, CONFIG_TEMPLATES,
                        PLACEHOLDER_FILES)
 
 
+def _enable_windows_system_menus():
+    """Let Windows draw this app's native menu bar and popup menus in the
+    system theme (dark menus when Windows is dark). Uses the well-known
+    uxtheme ordinals; silently no-ops when unavailable."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        uxtheme = ctypes.WinDLL("uxtheme")
+        set_preferred_app_mode = uxtheme[135]
+        set_preferred_app_mode.argtypes = [ctypes.c_int]
+        set_preferred_app_mode(1)      # 1 = AllowDark: follow the system
+        uxtheme[136]()                 # FlushMenuThemes
+    except Exception:
+        pass
+
+
+def apply_windows_titlebar(window, dark: bool):
+    """Ask DWM for a dark or light native title bar (Windows 10 1809+).
+    Tk cannot draw the OS frame itself; elsewhere this is a no-op."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        window.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id()) \
+            or window.winfo_id()
+        value = ctypes.c_int(1 if dark else 0)
+        for attribute in (20, 19):     # DWMWA_USE_IMMERSIVE_DARK_MODE
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, attribute, ctypes.byref(value),
+                    ctypes.sizeof(value)) == 0:
+                break
+        # SWP_NOSIZE|SWP_NOMOVE|SWP_NOZORDER|SWP_FRAMECHANGED: repaint the
+        # frame in place so the change shows immediately.
+        ctypes.windll.user32.SetWindowPos(
+            hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0020)
+    except Exception:
+        pass
+
+
 def detect_system_theme() -> str:
     """Best-effort OS dark/light detection (Windows registry, macOS
     defaults, GNOME gsettings). Falls back to light."""
@@ -585,6 +626,7 @@ class FileSelectionDialog(tk.Toplevel):
         self.bind("<Escape>", lambda e: self.destroy())
         self.wait_visibility()
         self.grab_set()
+        self.app.sync_titlebar(self)
 
     def _preset(self, configs: set, placeholders: set):
         for key, var in self._config_vars.items():
@@ -680,6 +722,7 @@ class NewProjectDialog(tk.Toplevel):
         self.wait_visibility()      # grab before mapping fails on some X11
         self.grab_set()
         self.focus_set()
+        app.sync_titlebar(self)
 
     def _browse(self):
         chosen = filedialog.askdirectory(
@@ -788,12 +831,13 @@ class ACModStudio(tk.Tk):
         # until the project is closed so switching back restores them.
         self.type_stash: dict[str, dict] = {}
 
-        # theme_mode: "dark" | "light" | "system" (default). Migrate the
-        # old explicit "theme" key from earlier versions.
-        mode = self.settings.get("theme_mode") \
-            or self.settings.get("theme") or "system"
+        # theme_mode: "dark" | "light" | "system". Follow-system is the
+        # default; the legacy "theme" key is discarded rather than
+        # migrated so existing installs also default to system.
+        mode = self.settings.get("theme_mode") or "system"
         if mode not in ("dark", "light", "system"):
             mode = "system"
+        _enable_windows_system_menus()
         self.theme_mode_var = tk.StringVar(value=mode)
         self.lut_labels_var = tk.BooleanVar(
             value=self.settings.get("lut_point_labels", True))
@@ -961,6 +1005,12 @@ class ACModStudio(tk.Tk):
         self.settings.pop("theme", None)        # retire the legacy key
         resolved = detect_system_theme() if mode == "system" else mode
         self.theme.apply(resolved)
+        self.sync_titlebar(self)
+
+    def sync_titlebar(self, window):
+        """Match a window's native title bar to the active theme (Windows
+        only; no-op elsewhere)."""
+        apply_windows_titlebar(window, self.theme.mode == "dark")
 
     def toggle_dark(self):
         """Ctrl+D: quick toggle — switches to the explicit theme opposite

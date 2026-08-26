@@ -41,6 +41,9 @@ on Debian/Ubuntu: `sudo apt install python3-tk`).
   labels (on by default), whether to reopen the last project on startup,
   and an option to append `.txt` to binary placeholder names
   (`my_car.kn5.txt`) so they open in any text editor. All persisted.
+  On Windows the native title bar (of the main window and every dialog)
+  follows the active theme via DWM, and the menu bar / popup menus are
+  drawn by Windows in the system colors.
 - **Visual config editor** — every `.ini` opens in a 2-tab notebook
   (*Visual* / *Raw Text*). The visual tab renders a bordered box per
   `[SECTION]` with a clean 2-column key/value grid; edits update the raw
