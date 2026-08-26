@@ -5,7 +5,7 @@ Provides:
   * ``ClosableNotebook``— workspace tabs with a working per-tab close button.
   * ``FileExplorer``    — left-pane project tree.
   * ``ACModStudio``     — the main window: split layout, routing, the
-                          " ADD COMPONENT ▾" template injector, dialogs.
+                          "ADD COMPONENT" template injector, dialogs.
 """
 
 from __future__ import annotations
@@ -286,6 +286,16 @@ class ThemeManager:
         s.configure("Toolbutton", background=p["bg"], foreground=p["fg"],
                     padding=(4, 0))
         s.map("Toolbutton", background=[("active", p["tab"])])
+        # flat toolbar strip below the menu bar
+        s.configure("Topbar.TFrame", background=p["panel"])
+        s.configure("Topbar.Toolbutton", background=p["panel"],
+                    foreground=p["fg"], padding=(10, 4))
+        s.map("Topbar.Toolbutton",
+              background=[("pressed", p["tab"]), ("active", p["tab"])])
+        s.configure("Topbar.TMenubutton", background=p["panel"],
+                    foreground=p["fg"], arrowcolor=p["fg"],
+                    bordercolor=p["panel"], padding=(10, 4))
+        s.map("Topbar.TMenubutton", background=[("active", p["tab"])])
         self.run_redraws()
 
     def run_redraws(self):
@@ -322,6 +332,12 @@ class ThemeManager:
 
     @staticmethod
     def _style_menu(menu: tk.Menu, p: dict):
+        if sys.platform == "win32":
+            # Windows draws menus natively and follows the system theme
+            # (via the AllowDark opt-in). Forcing palette colors only
+            # half-applies — hover bezels and cascade arrows stay native —
+            # so leave menus entirely to the OS there.
+            return
         try:
             menu.configure(background=p["panel"], foreground=p["fg"],
                            activebackground=p["select"],
@@ -437,7 +453,7 @@ class FileExplorer(ttk.Frame):
         header.pack(side="top", fill="x")
         self.title = ttk.Label(header, text="PROJECT", style="Title.TLabel")
         self.title.pack(side="left")
-        ttk.Button(header, text="⟳", width=3,
+        ttk.Button(header, text="Refresh", style="Toolbutton",
                    command=self.refresh).pack(side="right")
 
         body = ttk.Frame(self)
@@ -467,7 +483,7 @@ class FileExplorer(ttk.Frame):
         self.title.configure(text=f"PROJECT — {self.root_path.name}")
         root_iid = str(self.root_path)
         self.tree.insert("", "end", iid=root_iid, open=True,
-                         text=f"📁 {self.root_path.name}")
+                         text=self.root_path.name)
         self._insert_children(root_iid, self.root_path)
         for iid, was_open in open_state.items():
             if self.tree.exists(iid):
@@ -492,14 +508,13 @@ class FileExplorer(ttk.Frame):
                 continue
             if p.is_dir():
                 self.tree.insert(parent_iid, "end", iid=iid, open=False,
-                                 text=f"📁 {p.name}")
+                                 text=f"{p.name}/")
                 # Never descend through a symlinked dir — 'ln -s .. up'
                 # style loops would otherwise recurse forever.
                 if not p.is_symlink():
                     self._insert_children(iid, p)
             else:
-                self.tree.insert(parent_iid, "end", iid=iid,
-                                 text=f"📄 {p.name}")
+                self.tree.insert(parent_iid, "end", iid=iid, text=p.name)
 
     # -- interaction --------------------------------------------------------
     def _open_iid(self, iid: str):
@@ -534,20 +549,21 @@ class WelcomePane(ttk.Frame):
                   font=("TkDefaultFont", 20, "bold")).pack(anchor="w")
         ttk.Label(self, style="Muted.TLabel", justify="left", text=(
             "\nGenerate, browse and tune Assetto Corsa car mods.\n\n"
-            "  •  File ▸ New Car Project generates the full content/cars "
+            "  -  File > New Car Project generates the full content/cars "
             "hierarchy\n      (data, sfx, skins/00_default, ui) with physics "
             "templates and placeholders.\n"
-            "  •  Click a file on the left to edit it — suspensions.ini opens "
+            "  -  Click a file on the left to edit it — suspensions.ini opens "
             "the slider-based\n      tuning editor, other .ini files the "
-            "visual grid editor, JSON/LUT raw text.\n"
-            "  •  ' ADD COMPONENT ▾' injects turbos, wings, DRS or anti-roll "
+            "visual grid editor, .lut files a live\n      graph, JSON raw "
+            "text.\n"
+            "  -  'ADD COMPONENT' injects turbos, wings, DRS or anti-roll "
             "bars into the\n      active editor. Ctrl+S saves to disk.\n"
         )).pack(anchor="w")
         row = ttk.Frame(self)
         row.pack(anchor="w", pady=12)
-        ttk.Button(row, text="🆕  New Car Project", style="Accent.TButton",
+        ttk.Button(row, text="New Car Project", style="Accent.TButton",
                    command=app.new_project_dialog).pack(side="left")
-        ttk.Button(row, text="📂  Open Project Folder",
+        ttk.Button(row, text="Open Project Folder",
                    command=app.open_project_dialog).pack(side="left", padx=10)
 
 
@@ -959,19 +975,21 @@ class ACModStudio(tk.Tk):
         self.configure(menu=menubar)
 
     def _build_topbar(self):
-        bar = ttk.Frame(self, padding=(8, 6))
+        """Flat toolbar strip directly below the menu bar."""
+        bar = ttk.Frame(self, padding=(6, 3), style="Topbar.TFrame")
         bar.pack(side="top", fill="x")
-        ttk.Button(bar, text="🆕 New Car Project", style="Accent.TButton",
+        ttk.Button(bar, text="New Car Project", style="Topbar.Toolbutton",
                    command=self.new_project_dialog).pack(side="left")
-        ttk.Button(bar, text="📂 Open Project",
+        ttk.Button(bar, text="Open Project", style="Topbar.Toolbutton",
                    command=self.open_project_dialog).pack(side="left",
-                                                          padx=(8, 0))
+                                                          padx=(6, 0))
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y",
-                                                   padx=12, pady=2)
+                                                   padx=10, pady=3)
         self.component_menu = tk.Menu(self)
         self.theme.register_menu(self.component_menu)
         self.component_btn = ttk.Menubutton(
-            bar, text=" ADD COMPONENT ▾", menu=self.component_menu)
+            bar, text="ADD COMPONENT", style="Topbar.TMenubutton",
+            menu=self.component_menu)
         self.component_menu.configure(postcommand=self._build_component_menu)
         self.component_btn.pack(side="left")
         ttk.Separator(self, orient="horizontal").pack(side="top", fill="x")
@@ -1204,7 +1222,7 @@ class ACModStudio(tk.Tk):
         finally:
             menu.grab_release()
 
-    # ----------------------------------------------------- ADD COMPONENT ▾
+    # -----------------------------------------------------ADD COMPONENT
     def _build_component_menu(self):
         menu = self.component_menu
         menu.delete(0, "end")
@@ -1235,7 +1253,7 @@ class ACModStudio(tk.Tk):
                 all_sections = [pair for sections in variants.values()
                                 for pair in sections]
                 sub.add_command(
-                    label=f"► Add ALL {group} variants",
+                    label=f"Add ALL {group} variants",
                     command=lambda g=group, s=all_sections:
                         editor.inject_component(f"{g} — all variants", s))
             menu.add_cascade(label=group, menu=sub)

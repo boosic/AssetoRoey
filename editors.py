@@ -383,7 +383,7 @@ class BaseEditor(ttk.Frame):
     def _build_toolbar(self, extra_buttons=()):
         bar = ttk.Frame(self, padding=(6, 4))
         bar.pack(side="top", fill="x")
-        ttk.Button(bar, text="\U0001f4be Save", command=self.save,
+        ttk.Button(bar, text="Save", command=self.save,
                    style="Accent.TButton").pack(side="left")
         for text, cmd in extra_buttons:
             ttk.Button(bar, text=text, command=cmd).pack(side="left", padx=(6, 0))
@@ -744,8 +744,8 @@ class ConfigEditor(BaseEditor):
         self._sync_guard = False      # suppress <<Modified>> during programmatic set
         self._pending_sync = None     # debounce id for visual->raw sync
 
-        self._build_toolbar([("＋ Section", self._add_section_dialog),
-                             ("↻ Reload", self.reload_from_disk)])
+        self._build_toolbar([("+ Section", self._add_section_dialog),
+                             ("Reload", self.reload_from_disk)])
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True)
 
@@ -884,7 +884,7 @@ class ConfigEditor(BaseEditor):
             empty.grid(padx=14, pady=14, sticky="w")
             ttk.Label(empty, text="No [SECTION] blocks found.",
                       style="Muted.TLabel").pack(anchor="w")
-            ttk.Button(empty, text="＋ Add Section",
+            ttk.Button(empty, text="+ Add Section",
                        command=self._add_section_dialog).pack(
                 anchor="w", pady=(8, 0))
         self.visual_tab._on_interior_configure()

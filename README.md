@@ -53,7 +53,7 @@ on Debian/Ubuntu: `sudo apt install python3-tk`).
   fields**, and every row/section carries a small options menu
   (right-click a row, or the ⋮ on a section box): remove this key, remove
   any key via a submenu, add a key, add a section, remove the section —
-  more actions can slot in later. A "＋ Section" toolbar button (and an
+  more actions can slot in later. A "+ Section" toolbar button (and an
   empty-state button) creates sections even after all were removed.
 - **Suspension tuning editor** — `suspensions.ini` opens a BeamNG-style
   editor: `TYPE` renders as a dropdown of the vanilla AC suspension types
@@ -71,7 +71,7 @@ on Debian/Ubuntu: `sudo apt install python3-tk`).
   a live line graph (grid, tick labels, zero axis, hover readout, and
   per-point value labels shown by default) next to the raw text; the plot
   re-renders as you type and warns about malformed or non-ascending rows.
-- **ADD COMPONENT ▾** — injects Kunos-accurate template variants straight
+- **ADD COMPONENT** — injects Kunos-accurate template variants straight
   into the active editor's memory and refreshes the grid instantly:
   - *engine.ini*: street/race/80s-F1 turbos, twin-turbo pair, overboost
     damage,

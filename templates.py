@@ -7,7 +7,7 @@ Pure data, no tkinter. Holds:
                               ``[HEADER]`` formatting (car, aero, suspensions,
                               engine + supporting files).
   * ``LUT_FILES``           — lookup tables referenced by the templates.
-  * ``COMPONENT_LIBRARY``   — the " ADD COMPONENT ▾" template variants
+  * ``COMPONENT_LIBRARY``   — the "ADD COMPONENT" template variants
                               (turbos, aero wings, DRS, anti-roll bars, …).
   * ``SUSPENSION_TYPES`` / ``SUSPENSION_TYPE_DEFAULTS`` / ``SLIDER_HINTS``
                             — data driving the specialised suspension editor.
@@ -1024,7 +1024,7 @@ CONFIG_TEMPLATES = {
     "fuel_cons.ini": _FUEL_CONS_INI,
     # Kunos SDK sample ships these zero-byte: an EMPTY drs.ini keeps DRS
     # disabled (any non-empty drs.ini enables it). Populate them via the
-    # " ADD COMPONENT ▾" DRS / Wing Animation templates.
+    # "ADD COMPONENT" DRS / Wing Animation templates.
     "drs.ini": "",
     "wing_animations.ini": "",
 }
@@ -1215,7 +1215,7 @@ SLIDER_HINTS = {
 }
 
 # ---------------------------------------------------------------------------
-#  " ADD COMPONENT ▾" template library
+#  "ADD COMPONENT" template library
 # ---------------------------------------------------------------------------
 #  {target filename: {group: {variant: [(section, {key: value}), ...]}}}
 #  A section name ending in '#' (TURBO_#, WING_#) is auto-numbered to the
