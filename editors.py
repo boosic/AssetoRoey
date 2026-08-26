@@ -654,6 +654,21 @@ class LutEditor(BaseEditor):
             c.create_oval(px - 3, py - 3, px + 3, py + 3,
                           fill=p["accent"], outline=p["field"])
 
+        # always-visible point value labels (Settings ▸ LUT graphs)
+        if self.app.settings.get("lut_point_labels", True):
+            if len(self.points) <= 60:
+                for (x, y), (px, py) in zip(self.points, pixels):
+                    anchor = "s" if py > self.PAD_T + 20 else "n"
+                    offset = -7 if anchor == "s" else 7
+                    c.create_text(
+                        min(max(px, self.PAD_L + 12), w - self.PAD_R - 12),
+                        py + offset,
+                        text=f"{_fmt_num(x)}|{_fmt_num(y)}",
+                        fill=p["muted"], anchor=anchor,
+                        font=("TkDefaultFont", 7))
+            else:
+                info += "  (point labels hidden: >60 points)"
+
         self._draw_hover(geo)
         rng = (f"X {_fmt_num(xmin)} … {_fmt_num(xmax)}   "
                f"Y {_fmt_num(ymin)} … {_fmt_num(ymax)}")
@@ -729,7 +744,8 @@ class ConfigEditor(BaseEditor):
         self._sync_guard = False      # suppress <<Modified>> during programmatic set
         self._pending_sync = None     # debounce id for visual->raw sync
 
-        self._build_toolbar([("↻ Reload", self.reload_from_disk)])
+        self._build_toolbar([("＋ Section", self._add_section_dialog),
+                             ("↻ Reload", self.reload_from_disk)])
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True)
 
@@ -864,9 +880,13 @@ class ConfigEditor(BaseEditor):
             box = self._make_section_box(host, sec, row)
             self._build_section_body(sec, box)
         if not self.doc.sections:
-            ttk.Label(host, text="No [SECTION] blocks found — use the Raw Text "
-                                 "tab or ' ADD COMPONENT ▾' to start one.",
-                      style="Muted.TLabel").grid(padx=14, pady=14)
+            empty = ttk.Frame(host)
+            empty.grid(padx=14, pady=14, sticky="w")
+            ttk.Label(empty, text="No [SECTION] blocks found.",
+                      style="Muted.TLabel").pack(anchor="w")
+            ttk.Button(empty, text="＋ Add Section",
+                       command=self._add_section_dialog).pack(
+                anchor="w", pady=(8, 0))
         self.visual_tab._on_interior_configure()
 
     def _make_section_box(self, host, sec: Section, row: int) -> ttk.Frame:
@@ -974,14 +994,28 @@ class ConfigEditor(BaseEditor):
             menu = self._options_menu = tk.Menu(self, tearoff=0)
             self.app.theme.register_menu(menu)
         menu.delete(0, "end")
+        for child in menu.winfo_children():     # last post's submenus
+            child.destroy()
         if entry is not None:
             menu.add_command(
                 label=f"Remove  {entry.key}",
                 command=lambda: self.remove_key(sec, entry))
-            menu.add_separator()
+        if sec.kv_entries():
+            # Discoverable per-key removal, also reachable from the ⋮ button
+            sub = tk.Menu(menu, tearoff=0)
+            self.app.theme.register_menu(sub)
+            for e in sec.kv_entries():
+                sub.add_command(
+                    label=e.key,
+                    command=lambda s=sec, en=e: self.remove_key(s, en))
+            menu.add_cascade(label="Remove key from section  ▸", menu=sub)
+        menu.add_separator()
         menu.add_command(
             label=f"Add key to [{sec.name}]…",
             command=lambda: self._add_key_dialog(sec))
+        menu.add_command(
+            label="Add section…",
+            command=self._add_section_dialog)
         menu.add_separator()
         menu.add_command(
             label=f"Remove section [{sec.name}]",
@@ -1008,6 +1042,53 @@ class ConfigEditor(BaseEditor):
             self.doc.sections.remove(sec)
             self._refresh_after_model_change(
                 f"Removed section [{sec.name}]  (unsaved)")
+
+    def add_new_section(self, name: str) -> Section | None:
+        name = name.strip().strip("[]").strip().upper().replace(" ", "_")
+        if not name:
+            return None
+        existing = self.doc.section(name)
+        if existing is not None:
+            self.app.set_status(f"[{name}] already exists")
+            return existing
+        sec = self.doc.add_section(name)
+        self._refresh_after_model_change(
+            f"Added section [{name}]  (unsaved)")
+        return sec
+
+    def _add_section_dialog(self):
+        dlg = tk.Toplevel(self)
+        dlg.title("Add section")
+        dlg.configure(bg=self.app.theme.palette()["bg"])
+        dlg.transient(self.winfo_toplevel())
+        dlg.resizable(False, False)
+        frame = ttk.Frame(dlg, padding=14)
+        frame.pack(fill="both", expand=True)
+        name_var = tk.StringVar()
+        ttk.Label(frame, text="Section name").grid(row=0, column=0,
+                                                   sticky="w", padx=(0, 10))
+        name_entry = ttk.Entry(frame, textvariable=name_var, width=26)
+        name_entry.grid(row=0, column=1)
+        ttk.Label(frame, style="Muted.TLabel",
+                  text="e.g. TURBO_1, HEAVE_FRONT, WING_2 — brackets "
+                       "optional").grid(row=1, column=0, columnspan=2,
+                                        sticky="w", pady=(4, 8))
+
+        def ok(_event=None):
+            if self.add_new_section(name_var.get()) is not None:
+                dlg.destroy()
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=2, column=0, columnspan=2, sticky="e")
+        ttk.Button(buttons, text="Cancel",
+                   command=dlg.destroy).pack(side="right", padx=(8, 0))
+        ttk.Button(buttons, text="Add", style="Accent.TButton",
+                   command=ok).pack(side="right")
+        dlg.bind("<Return>", ok)
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        dlg.wait_visibility()
+        dlg.grab_set()
+        name_entry.focus_set()
 
     def _add_key_dialog(self, sec: Section):
         dlg = tk.Toplevel(self)

@@ -16,10 +16,42 @@ import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+import subprocess
+import sys
+
 from editors import (BaseEditor, ConfigEditor, LutEditor, RawTextEditor,
-                     SuspensionEditor)
+                     ScrollableFrame, SuspensionEditor)
 from generator import generate_car_project, sanitize_car_id
-from templates import APP_TITLE, COMPONENT_LIBRARY
+from templates import (APP_TITLE, COMPONENT_LIBRARY, CONFIG_TEMPLATES,
+                       MINIMAL_CONFIG_FILES, MINIMAL_PLACEHOLDER_FILES,
+                       PLACEHOLDER_FILES)
+
+
+def detect_system_theme() -> str:
+    """Best-effort OS dark/light detection (Windows registry, macOS
+    defaults, GNOME gsettings). Falls back to light."""
+    try:
+        if sys.platform == "win32":
+            import winreg
+            key_path = (r"Software\Microsoft\Windows\CurrentVersion"
+                        r"\Themes\Personalize")
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+                value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+                return "light" if value else "dark"
+        if sys.platform == "darwin":
+            out = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                capture_output=True, text=True, timeout=2)
+            return "dark" if "dark" in out.stdout.lower() else "light"
+        out = subprocess.run(
+            ["gsettings", "get", "org.gnome.desktop.interface",
+             "color-scheme"],
+            capture_output=True, text=True, timeout=2)
+        if "dark" in out.stdout.lower():
+            return "dark"
+    except Exception:
+        pass
+    return "light"
 
 SETTINGS_PATH = Path.home() / ".ac_mod_studio.json"
 
@@ -213,6 +245,11 @@ class ThemeManager:
         s.configure("Toolbutton", background=p["bg"], foreground=p["fg"],
                     padding=(4, 0))
         s.map("Toolbutton", background=[("active", p["tab"])])
+        self.run_redraws()
+
+    def run_redraws(self):
+        """Re-invoke every registered canvas redraw (theme or display
+        settings changed)."""
         self._redraws = [(w, f) for w, f in self._redraws if self._alive(w)]
         for _w, redraw in self._redraws:
             try:
@@ -474,6 +511,97 @@ class WelcomePane(ttk.Frame):
 
 
 # ---------------------------------------------------------------------------
+#  Custom file selection for New Car Project
+# ---------------------------------------------------------------------------
+
+class FileSelectionDialog(tk.Toplevel):
+    """Checklist of the data templates and asset placeholders to generate.
+    Result in ``self.result``: {"configs": set, "placeholders": set} or None
+    when cancelled. Referenced LUTs are resolved by the generator."""
+
+    def __init__(self, parent: tk.Toplevel, car_id: str,
+                 current: dict | None):
+        super().__init__(parent)
+        self.app = parent.app
+        self.title("Choose files to generate")
+        self.configure(bg=self.app.theme.palette()["bg"])
+        self.transient(parent)
+        self.result: dict | None = None
+        car_id = sanitize_car_id(car_id) or "my_car"
+
+        outer = ttk.Frame(self, padding=12)
+        outer.pack(fill="both", expand=True)
+        columns = ttk.Frame(outer)
+        columns.pack(fill="both", expand=True)
+
+        self._config_vars: dict[str, tk.BooleanVar] = {}
+        self._ph_vars: dict[str, tk.BooleanVar] = {}
+
+        def build_column(title, items, var_map, selected, required,
+                         display=lambda k: k):
+            box = ttk.LabelFrame(columns, text=f" {title} ", padding=(8, 6))
+            box.pack(side="left", fill="both", expand=True, padx=4)
+            scroll = ScrollableFrame(box)
+            scroll.pack(fill="both", expand=True)
+            scroll.canvas.configure(width=290, height=320)
+            for key in items:
+                var = tk.BooleanVar(value=key in selected)
+                var_map[key] = var
+                text = display(key)
+                if key in required:
+                    text += "   • needed to drive"
+                ttk.Checkbutton(scroll.interior, text=text,
+                                variable=var).pack(anchor="w")
+
+        current_cfg = (current or {}).get("configs",
+                                          set(MINIMAL_CONFIG_FILES))
+        current_ph = (current or {}).get("placeholders",
+                                         set(MINIMAL_PLACEHOLDER_FILES))
+        build_column("data/ physics files", sorted(CONFIG_TEMPLATES),
+                     self._config_vars, current_cfg, MINIMAL_CONFIG_FILES)
+        build_column("assets & placeholders", sorted(PLACEHOLDER_FILES),
+                     self._ph_vars, current_ph, MINIMAL_PLACEHOLDER_FILES,
+                     display=lambda k: k.replace("$car", car_id))
+
+        presets = ttk.Frame(outer)
+        presets.pack(fill="x", pady=(10, 0))
+        ttk.Button(presets, text="Minimal set",
+                   command=lambda: self._preset(MINIMAL_CONFIG_FILES,
+                                                MINIMAL_PLACEHOLDER_FILES)
+                   ).pack(side="left")
+        ttk.Button(presets, text="Everything",
+                   command=lambda: self._preset(set(CONFIG_TEMPLATES),
+                                                set(PLACEHOLDER_FILES))
+                   ).pack(side="left", padx=(8, 0))
+        ttk.Label(presets, style="Muted.TLabel",
+                  text="LUT tables referenced by the chosen files are "
+                       "generated automatically.").pack(side="left",
+                                                        padx=(12, 0))
+        ttk.Button(presets, text="Cancel",
+                   command=self.destroy).pack(side="right", padx=(8, 0))
+        ttk.Button(presets, text="OK", style="Accent.TButton",
+                   command=self._ok).pack(side="right")
+
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.wait_visibility()
+        self.grab_set()
+
+    def _preset(self, configs: set, placeholders: set):
+        for key, var in self._config_vars.items():
+            var.set(key in configs)
+        for key, var in self._ph_vars.items():
+            var.set(key in placeholders)
+
+    def _ok(self):
+        self.result = {
+            "configs": {k for k, v in self._config_vars.items() if v.get()},
+            "placeholders": {k for k, v in self._ph_vars.items()
+                             if v.get()},
+        }
+        self.destroy()
+
+
+# ---------------------------------------------------------------------------
 #  New-project dialog
 # ---------------------------------------------------------------------------
 
@@ -508,12 +636,32 @@ class NewProjectDialog(tk.Toplevel):
                 row=r, column=1, sticky="ew", pady=4)
         ttk.Button(frame, text="Browse…", command=self._browse).grid(
             row=0, column=2, padx=(6, 0))
-        self.minimal_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            frame, variable=self.minimal_var,
-            text="Minimal file set — only what the sim needs to load and "
-                 "drive the car").grid(
-            row=len(rows), column=0, columnspan=3, sticky="w", pady=(6, 2))
+        scope_box = ttk.LabelFrame(frame, text=" Files to generate ",
+                                   padding=(10, 6))
+        scope_box.grid(row=len(rows), column=0, columnspan=3, sticky="ew",
+                       pady=(8, 2))
+        self.scope_var = tk.StringVar(value="full")
+        self.custom_selection: dict | None = None
+        ttk.Radiobutton(scope_box, text="Full car (all templates)",
+                        value="full", variable=self.scope_var,
+                        command=self._on_scope_change).pack(anchor="w")
+        ttk.Radiobutton(scope_box,
+                        text="Minimal — only what the sim needs to load "
+                             "and drive the car",
+                        value="minimal", variable=self.scope_var,
+                        command=self._on_scope_change).pack(anchor="w")
+        custom_row = ttk.Frame(scope_box)
+        custom_row.pack(anchor="w", fill="x")
+        ttk.Radiobutton(custom_row, text="Custom selection",
+                        value="custom", variable=self.scope_var,
+                        command=self._on_scope_change).pack(side="left")
+        self.choose_btn = ttk.Button(custom_row, text="Choose files…",
+                                     state="disabled",
+                                     command=self._choose_files)
+        self.choose_btn.pack(side="left", padx=(10, 0))
+        self.scope_info = ttk.Label(scope_box, text="", style="Muted.TLabel")
+        self.scope_info.pack(anchor="w", pady=(2, 0))
+
         ttk.Label(frame, style="Muted.TLabel",
                   text="ID is the folder name — lowercase, digits and "
                        "underscores only.").grid(
@@ -539,6 +687,33 @@ class NewProjectDialog(tk.Toplevel):
             title="Choose the folder that will contain the car project")
         if chosen:
             self.vars["location"].set(chosen)
+
+    def _on_scope_change(self):
+        custom = self.scope_var.get() == "custom"
+        self.choose_btn.configure(state="normal" if custom else "disabled")
+        if custom and self.custom_selection is None:
+            self._choose_files()
+        self._update_scope_info()
+
+    def _update_scope_info(self):
+        if self.scope_var.get() == "custom" and self.custom_selection:
+            n_cfg = len(self.custom_selection["configs"])
+            n_ph = len(self.custom_selection["placeholders"])
+            self.scope_info.configure(
+                text=f"{n_cfg} data files + {n_ph} asset placeholders "
+                     "selected (referenced LUTs are added automatically)")
+        else:
+            self.scope_info.configure(text="")
+
+    def _choose_files(self):
+        dialog = FileSelectionDialog(self, self.vars["car_id"].get(),
+                                     self.custom_selection)
+        self.wait_window(dialog)
+        if dialog.result is not None:
+            self.custom_selection = dialog.result
+            self.scope_var.set("custom")
+            self.choose_btn.configure(state="normal")
+        self._update_scope_info()
 
     def _create(self):
         loc_text = self.vars["location"].get().strip()
@@ -566,11 +741,21 @@ class NewProjectDialog(tk.Toplevel):
                     f"(existing files are kept)?", parent=self):
                 return
             overwrite = True
+        gen_kwargs = {}
+        scope = self.scope_var.get()
+        if scope == "minimal":
+            gen_kwargs["minimal"] = True
+        elif scope == "custom" and self.custom_selection is not None:
+            gen_kwargs["config_files"] = self.custom_selection["configs"]
+            gen_kwargs["placeholder_files"] = \
+                self.custom_selection["placeholders"]
+        gen_kwargs["placeholder_txt_suffix"] = \
+            self.app.settings.get("placeholder_txt_suffix", False)
         try:
             project = generate_car_project(location, car_id,
                                            screen_name=screen_name,
                                            brand=brand, overwrite=overwrite,
-                                           minimal=self.minimal_var.get())
+                                           **gen_kwargs)
         except OSError as exc:
             messagebox.showerror("New Car Project",
                                  f"Could not create the project:\n{exc}",
@@ -603,15 +788,26 @@ class ACModStudio(tk.Tk):
         # until the project is closed so switching back restores them.
         self.type_stash: dict[str, dict] = {}
 
-        self.dark_var = tk.BooleanVar(
-            value=self.settings.get("theme", "dark") == "dark")
+        # theme_mode: "dark" | "light" | "system" (default). Migrate the
+        # old explicit "theme" key from earlier versions.
+        mode = self.settings.get("theme_mode") \
+            or self.settings.get("theme") or "system"
+        if mode not in ("dark", "light", "system"):
+            mode = "system"
+        self.theme_mode_var = tk.StringVar(value=mode)
+        self.lut_labels_var = tk.BooleanVar(
+            value=self.settings.get("lut_point_labels", True))
+        self.reopen_var = tk.BooleanVar(
+            value=self.settings.get("reopen_last_project", True))
+        self.txt_suffix_var = tk.BooleanVar(
+            value=self.settings.get("placeholder_txt_suffix", False))
 
         self._build_menubar()
         self._build_topbar()
         self._build_body()
         self._build_statusbar()
 
-        self.theme.apply("dark" if self.dark_var.get() else "light")
+        self._apply_theme_mode()
 
         # Tk's Text/Entry class bindings claim Ctrl+D (delete char),
         # Ctrl+O (insert newline) and Ctrl+N (next line) — and class bindings
@@ -633,7 +829,8 @@ class ACModStudio(tk.Tk):
                            text="  Welcome  ")
 
         last = self.settings.get("last_project")
-        if last and Path(last).is_dir():
+        if self.settings.get("reopen_last_project", True) and last \
+                and Path(last).is_dir():
             self.load_project(Path(last))
 
     def _accel(self, fn):
@@ -669,12 +866,42 @@ class ACModStudio(tk.Tk):
 
         view_menu = tk.Menu(menubar)
         self.theme.register_menu(view_menu)
-        view_menu.add_checkbutton(label="Dark Mode", accelerator="Ctrl+D",
-                                  variable=self.dark_var,
-                                  command=self._apply_theme_choice)
         view_menu.add_command(label="Refresh File Tree", accelerator="F5",
                               command=lambda: self.explorer.refresh())
         menubar.add_cascade(label="View", menu=view_menu)
+
+        settings_menu = tk.Menu(menubar)
+        self.theme.register_menu(settings_menu)
+        theme_menu = tk.Menu(settings_menu)
+        self.theme.register_menu(theme_menu)
+        theme_menu.add_radiobutton(
+            label="Dark mode", value="dark", variable=self.theme_mode_var,
+            command=lambda: self._apply_theme_mode("dark"))
+        theme_menu.add_radiobutton(
+            label="Regular (light) mode", value="light",
+            variable=self.theme_mode_var,
+            command=lambda: self._apply_theme_mode("light"))
+        theme_menu.add_radiobutton(
+            label="Follow system colors  (default)", value="system",
+            variable=self.theme_mode_var,
+            command=lambda: self._apply_theme_mode("system"))
+        settings_menu.add_cascade(label="Theme  (Ctrl+D toggles dark/light)",
+                                  menu=theme_menu)
+        settings_menu.add_separator()
+        settings_menu.add_checkbutton(
+            label="Show point values on LUT graphs",
+            variable=self.lut_labels_var, command=self._apply_lut_labels)
+        settings_menu.add_checkbutton(
+            label="Reopen last project on startup",
+            variable=self.reopen_var,
+            command=lambda: self._set_setting("reopen_last_project",
+                                              self.reopen_var.get()))
+        settings_menu.add_checkbutton(
+            label="Append .txt to binary placeholder names (new projects)",
+            variable=self.txt_suffix_var,
+            command=lambda: self._set_setting("placeholder_txt_suffix",
+                                              self.txt_suffix_var.get()))
+        menubar.add_cascade(label="Settings", menu=settings_menu)
 
         help_menu = tk.Menu(menubar)
         self.theme.register_menu(help_menu)
@@ -703,9 +930,6 @@ class ACModStudio(tk.Tk):
             bar, text=" ADD COMPONENT ▾", menu=self.component_menu)
         self.component_menu.configure(postcommand=self._build_component_menu)
         self.component_btn.pack(side="left")
-
-        ttk.Checkbutton(bar, text="🌙 Dark Mode", variable=self.dark_var,
-                        command=self._apply_theme_choice).pack(side="right")
         ttk.Separator(self, orient="horizontal").pack(side="top", fill="x")
 
     def _build_body(self):
@@ -724,15 +948,29 @@ class ACModStudio(tk.Tk):
         ttk.Label(self, textvariable=self.status_var, padding=(10, 4),
                   style="Muted.TLabel").pack(side="bottom", fill="x")
 
-    # -------------------------------------------------------------- theming
-    def _apply_theme_choice(self):
-        self.theme.apply("dark" if self.dark_var.get() else "light")
-        self.settings["theme"] = "dark" if self.dark_var.get() else "light"
+    # ------------------------------------------------------------ settings
+    def _set_setting(self, key: str, value):
+        self.settings[key] = value
         self._save_settings()
 
+    def _apply_theme_mode(self, mode: str | None = None):
+        if mode is not None:
+            self.theme_mode_var.set(mode)
+        mode = self.theme_mode_var.get()
+        self._set_setting("theme_mode", mode)
+        self.settings.pop("theme", None)        # retire the legacy key
+        resolved = detect_system_theme() if mode == "system" else mode
+        self.theme.apply(resolved)
+
     def toggle_dark(self):
-        self.dark_var.set(not self.dark_var.get())
-        self._apply_theme_choice()
+        """Ctrl+D: quick toggle — switches to the explicit theme opposite
+        of what is currently showing."""
+        self._apply_theme_mode(
+            "light" if self.theme.mode == "dark" else "dark")
+
+    def _apply_lut_labels(self):
+        self._set_setting("lut_point_labels", self.lut_labels_var.get())
+        self.theme.run_redraws()
 
     # ------------------------------------------------------------- projects
     def new_project_dialog(self):

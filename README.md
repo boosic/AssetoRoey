@@ -28,13 +28,19 @@ on Debian/Ubuntu: `sudo apt install python3-tk`).
   - placeholder text files for every mandatory binary asset (`.kn5` models,
     FMOD `.bank` + `GUIDs.txt`, previews, badges, blob shadows) explaining
     how to produce the real thing.
-  A **"Minimal file set"** option generates only what the sim needs to
-  load and drive the car (no setup screen, driver aids, shadows, badges or
-  DRS/animation stubs).
+  Choose **Full car**, **Minimal** (only what the sim needs to load and
+  drive), or a **Custom selection** — pick exactly which `data/` templates
+  and asset placeholders to create; the LUTs they reference are added
+  automatically.
 - **Split-screen shell** — file-explorer tree on the left, tabbed editor
   workspace on the right, with closable tabs (the ✕ stays visible however
   many tabs are open; right-click a tab for Close / Close Others /
-  Close All), a status bar and a persisted **dark mode** (Ctrl+D).
+  Close All) and a status bar.
+- **Settings menu** — theme (Dark / Regular / **Follow system colors**,
+  the default; Ctrl+D quick-toggles dark/light), always-visible LUT point
+  labels (on by default), whether to reopen the last project on startup,
+  and an option to append `.txt` to binary placeholder names
+  (`my_car.kn5.txt`) so they open in any text editor. All persisted.
 - **Visual config editor** — every `.ini` opens in a 2-tab notebook
   (*Visual* / *Raw Text*). The visual tab renders a bordered box per
   `[SECTION]` with a clean 2-column key/value grid; edits update the raw
@@ -42,8 +48,10 @@ on Debian/Ubuntu: `sudo apt install python3-tk`).
   and file layout are preserved on save (Ctrl+S — nothing touches disk
   until you save). 3-component vector values render as labelled **X/Y/Z
   fields**, and every row/section carries a small options menu
-  (right-click a row, or the ⋮ on a section box): remove a key, add a key,
-  remove a section — more actions can slot in later.
+  (right-click a row, or the ⋮ on a section box): remove this key, remove
+  any key via a submenu, add a key, add a section, remove the section —
+  more actions can slot in later. A "＋ Section" toolbar button (and an
+  empty-state button) creates sections even after all were removed.
 - **Suspension tuning editor** — `suspensions.ini` opens a BeamNG-style
   editor: `TYPE` renders as a dropdown of the vanilla AC suspension types
   (DWB, STRUT, AXLE, ML). Switching type updates the file properly:
@@ -57,9 +65,9 @@ on Debian/Ubuntu: `sudo apt install python3-tk`).
   the current limit stretches the slider range, and integer keys snap to
   whole numbers.
 - **LUT graph viewer** — `.lut` lookup tables open in a 2-tab editor with
-  a live line graph (grid, tick labels, zero axis, hover readout of the
-  nearest point) next to the raw text; the plot re-renders as you type and
-  warns about malformed or non-ascending rows.
+  a live line graph (grid, tick labels, zero axis, hover readout, and
+  per-point value labels shown by default) next to the raw text; the plot
+  re-renders as you type and warns about malformed or non-ascending rows.
 - **ADD COMPONENT ▾** — injects Kunos-accurate template variants straight
   into the active editor's memory and refreshes the grid instantly:
   - *engine.ini*: street/race/80s-F1 turbos, twin-turbo pair, overboost
