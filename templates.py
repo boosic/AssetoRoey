@@ -340,6 +340,422 @@ ZONE_RIGHT_CL=0
 ZONE_RIGHT_CD=0.01
 """
 
+_DRIVETRAIN_INI = """[HEADER]
+VERSION=3
+
+[TRACTION]
+TYPE=RWD\t\t\t\t; Wheel drive. Possible options: FWD (Front Wheel Drive), RWD (Rear Wheel Drive), AWD (All Wheel Drive)
+
+[GEARS]
+COUNT=6\t\t\t\t\t; forward gears number
+GEAR_R=-4.696\t\t\t\t; rear gear ratio
+GEAR_1=5.09
+GEAR_2=2.99
+GEAR_3=2.04
+GEAR_4=1.59
+GEAR_5=1.29
+GEAR_6=1.0
+FINAL=2.87\t\t\t\t; final gear ratio
+
+[DIFFERENTIAL]
+POWER=0.60\t\t\t\t; differential lock under power. 1.0=100% lock - 0 0% lock
+COAST=0.45\t\t\t\t; differential lock under coasting. 1.0=100% lock 0=0% lock
+PRELOAD=0\t\t\t\t; preload torque setting
+
+[GEARBOX]
+CHANGE_UP_TIME=260\t\t\t; change up time in milliseconds
+CHANGE_DN_TIME=270\t\t\t; change down time in milliseconds
+AUTO_CUTOFF_TIME=260\t\t\t; Auto cutoff time for upshifts in milliseconds, 0 to disable
+SUPPORTS_SHIFTER=1\t\t\t; 1=Car supports shifter, 0=car supports only paddles
+VALID_SHIFT_RPM_WINDOW=800\t\t; range window additional to the precise rev matching rpm that permits gear engage
+CONTROLS_WINDOW_GAIN=0.4\t\t; multiplayer for gas,brake,clutch pedals that permits gear engage
+INERTIA=0.0182\t\t\t\t; gearbox rotating inertia
+
+[CLUTCH]
+MAX_TORQUE=300\t\t\t\t; Nm the clutch can transfer
+
+[AUTOCLUTCH]
+UPSHIFT_PROFILE=NONE\t\t\t; Name of the profile to use for autoclutch on upshifts
+DOWNSHIFT_PROFILE=DOWNSHIFT_PROFILE\t; Same as above for downshifts
+USE_ON_CHANGES=1\t\t\t; Use the autoclutch on gear shifts even when autoclutch is set to off
+MIN_RPM=1200\t\t\t\t; Minimum rpm for autoclutch engadgement
+MAX_RPM=1800\t\t\t\t; Maximum rpm for autoclutch engadgement
+FORCED_ON=0
+
+[DOWNSHIFT_PROFILE]
+POINT_0=50\t\t\t\t; Time to reach fully depress clutch
+POINT_1=280\t\t\t\t; Time to start releasing clutch
+POINT_2=600\t\t\t\t; Time to reach fully released clutch
+
+[AUTOBLIP]
+ELECTRONIC=0\t\t\t\t; If =1 then it is a feature of the car and cannot be disabled
+POINT_0=20\t\t\t\t; Time to reach full level
+POINT_1=140\t\t\t\t; Time to start releasing gas
+POINT_2=200\t\t\t\t; Time to reach 0 gas
+LEVEL=0.8\t\t\t\t; Gas level to be reached
+
+[DAMAGE]
+RPM_WINDOW_K=100
+
+[AUTO_SHIFTER]
+UP=7200
+DOWN=3500
+SLIP_THRESHOLD=0.95
+GAS_CUTOFF_TIME=0.300
+"""
+
+_BRAKES_INI = """[HEADER]
+VERSION=1
+
+[DATA]
+MAX_TORQUE=2500\t\t\t\t; Maximum Brake torque in Nm
+FRONT_SHARE=0.75\t\t\t; Percentance of brake torque at front axis
+HANDBRAKE_TORQUE=1000
+COCKPIT_ADJUSTABLE=0\t\t\t; 0: no bias control from cockpit, 1: bias control from cockpit
+ADJUST_STEP=0.5\t\t\t\t; step for bias cockpit adjustment
+"""
+
+_ELECTRONICS_INI = """[ABS]
+SLIP_RATIO_LIMIT=0.11\t\t\t; Slipratio limit before ABS engages
+CURVE=\t\t\t\t\t; Slipratio lookup table for multiple ABS levels. Leave blank for a single level
+PRESENT=1\t\t\t\t; 1 if present in car, 0 if not present
+ACTIVE=1\t\t\t\t; 1 will make the car start with ABS active
+RATE_HZ=250\t\t\t\t; ABS pulse frequency
+
+[TRACTION_CONTROL]
+SLIP_RATIO_LIMIT=0.11\t\t\t; Slipratio limit before TC engages
+CURVE=\t\t\t\t\t; e.g. CURVE=tc_curve.lut for multi-level TC
+PRESENT=1
+ACTIVE=1
+RATE_HZ=170\t\t\t\t; TC pulse frequency
+MIN_SPEED_KMH=35\t\t\t; TC automatically OFF under this speed
+"""
+
+_COLLIDERS_INI = """[COLLIDER_0]
+CENTRE=0,-0.26,0.05\t\t\t; x,y,z of box centre, metres, relative to model origin
+SIZE=1.57,0.08,3.30\t\t\t; width, height, length of box in metres
+GROUND_ENABLE=1\t\t\t\t; box collides with the ground
+"""
+
+_TYRES_INI = """[HEADER]
+VERSION=10\t\t\t\t; final AC tyre model (AC 1.14+)
+
+[VIRTUALKM]
+USE_LOAD=1
+
+[COMPOUND_DEFAULT]
+INDEX=0\t\t\t\t\t; default compound index
+
+[FRONT]
+NAME=Street
+SHORT_NAME=ST
+WIDTH=0.205\t\t\t\t; tyre width in meters
+RADIUS=0.30815\t\t\t\t; tyre radius in meters
+RIM_RADIUS=0.2286\t\t\t; rim radius in meters (use 1 inch more than nominal)
+ANGULAR_INERTIA=1.65\t\t\t; angular inertia of front rim+tyre+brake disc together
+DAMP=500\t\t\t\t; Damping rate of front tyre in N sec/m
+RATE=233568\t\t\t\t; Spring rate of front tyres in N/m
+WEAR_CURVE=street_front.lut\t\t; lookup table (vkm | grip%)
+SPEED_SENSITIVITY=0.003601
+RELAXATION_LENGTH=0.07137
+ROLLING_RESISTANCE_0=10\t\t\t; rolling resistance constant component
+ROLLING_RESISTANCE_1=0.000973\t\t; rolling resistance velocity (squared) component
+ROLLING_RESISTANCE_SLIP=4668\t\t; rolling resistance slip angle component
+FLEX=0.001113\t\t\t\t; tire profile flex. bigger number = more flex
+CAMBER_GAIN=0.110\t\t\t; Camber gain value as slipangle multiplayer
+DCAMBER_0=1.1
+DCAMBER_1=-13\t\t\t\t; D=D*(1.0 - (camberRAD*DCAMBER_0 + camberRAD^2 * DCAMBER_1))
+FRICTION_LIMIT_ANGLE=8.88\t\t; Slip angle peak (degrees)
+XMU=0.28
+PRESSURE_STATIC=29\t\t\t; STATIC (COLD) PRESSURE, psi
+PRESSURE_SPRING_GAIN=7364\t\t; INCREASE IN N/m per psi (from 26psi reference)
+PRESSURE_FLEX_GAIN=0.45\t\t\t; INCREASE IN FLEX per psi
+PRESSURE_RR_GAIN=0.55\t\t\t; INCREASE IN RR RESISTENCE per psi
+PRESSURE_D_GAIN=0.004\t\t\t; loss of tyre footprint with pressure rise
+PRESSURE_IDEAL=35\t\t\t; Ideal pressure for grip, psi
+FZ0=2517\t\t\t\t; reference load N
+LS_EXPY=0.8243\t\t\t\t; lateral load-sensitivity exponent
+LS_EXPX=0.8914\t\t\t\t; longitudinal load-sensitivity exponent
+DX_REF=1.26\t\t\t\t; longitudinal friction coeff at FZ0
+DY_REF=1.23\t\t\t\t; lateral friction coeff at FZ0
+FLEX_GAIN=0.0311
+FALLOFF_LEVEL=0.87\t\t\t; grip fraction far past the peak
+FALLOFF_SPEED=4
+CX_MULT=1.02
+RADIUS_ANGULAR_K=0.01\t\t\t; Radius grows in MILLIMETERS with angular velocity
+BRAKE_DX_MOD=0.05
+
+[REAR]
+NAME=Street
+SHORT_NAME=ST
+WIDTH=0.205
+RADIUS=0.30815
+RIM_RADIUS=0.2286
+ANGULAR_INERTIA=1.65
+DAMP=500
+RATE=233568
+WEAR_CURVE=street_rear.lut
+SPEED_SENSITIVITY=0.003601
+RELAXATION_LENGTH=0.07137
+ROLLING_RESISTANCE_0=10
+ROLLING_RESISTANCE_1=0.000973
+ROLLING_RESISTANCE_SLIP=4668
+FLEX=0.001113
+CAMBER_GAIN=0.110
+DCAMBER_0=1.1
+DCAMBER_1=-13
+FRICTION_LIMIT_ANGLE=8.88
+XMU=0.28
+PRESSURE_STATIC=29
+PRESSURE_SPRING_GAIN=7364
+PRESSURE_FLEX_GAIN=0.45
+PRESSURE_RR_GAIN=0.55
+PRESSURE_D_GAIN=0.004
+PRESSURE_IDEAL=35
+FZ0=2517
+LS_EXPY=0.8243
+LS_EXPX=0.8914
+DX_REF=1.26
+DY_REF=1.23
+FLEX_GAIN=0.0311
+FALLOFF_LEVEL=0.87
+FALLOFF_SPEED=4
+CX_MULT=1.02
+RADIUS_ANGULAR_K=0.01
+BRAKE_DX_MOD=0.05
+
+[THERMAL_FRONT]
+SURFACE_TRANSFER=0.0140\t\t\t; How fast external sources heat the tread: 0-1
+PATCH_TRANSFER=0.00027\t\t\t; heat transfer between tyre locations: 0-1
+CORE_TRANSFER=0.00049\t\t\t; tyre tread to inner air
+INTERNAL_CORE_TRANSFER=0.0057
+FRICTION_K=0.06001\t\t\t; Quantity of slip becoming heat
+ROLLING_K=0.23\t\t\t\t; rolling resistance heat
+PERFORMANCE_CURVE=tcurve_street.lut\t; temperature/grip lut
+GRAIN_GAMMA=1
+GRAIN_GAIN=0.4
+BLISTER_GAMMA=1
+BLISTER_GAIN=0.4
+COOL_FACTOR=2.51
+SURFACE_ROLLING_K=1.15054
+
+[THERMAL_REAR]
+SURFACE_TRANSFER=0.0140
+PATCH_TRANSFER=0.00027
+CORE_TRANSFER=0.00049
+INTERNAL_CORE_TRANSFER=0.0057
+FRICTION_K=0.06001
+ROLLING_K=0.23
+PERFORMANCE_CURVE=tcurve_street.lut
+GRAIN_GAMMA=1
+GRAIN_GAIN=0.4
+BLISTER_GAMMA=1
+BLISTER_GAIN=0.4
+COOL_FACTOR=2.51
+SURFACE_ROLLING_K=1.15054
+"""
+
+_AI_INI = """[HEADER]
+VERSION=3
+
+[GEARS]
+UP=7200\t\t\t\t\t; AI upshift rpm
+DOWN=4000\t\t\t\t; AI downshift rpm
+SLIP_THRESHOLD=0.95
+GAS_CUTOFF_TIME=0.300
+
+[PEDALS]
+GASGAIN=4.0
+BRAKE_HINT=1.06
+TRAIL_HINT=1
+
+[STEER]
+STEER_GAIN=1.67
+
+[LOOKAHEAD]
+BASE=18.5
+GAS_BRAKE_LOOKAHEAD=0
+
+[ULTRA_GRIP]
+VALUE=1.2
+
+[PHYSICS_HINTS]
+AERO_HINT=1
+"""
+
+_LODS_INI = """[COCKPIT_HR]
+DISTANCE_SWITCH=7\t\t\t; metres: swap to low-res cockpit beyond this
+
+[DRIVER_HR]
+DISTANCE_SWITCH=25
+
+[LOD_0]
+FILE=$car.kn5
+IN=0
+OUT=2000
+"""
+
+_DRIVER3D_INI = """[MODEL]
+NAME=driver_no_HANS\t\t\t; driver 3D model from content/driver
+POSITION=0.36,0.09,-0.23\t\t; driver model position relative to the car
+
+[STEER_ANIMATION]
+NAME=steer.ksanim\t\t\t; steering animation clip in animations/
+LOCK=360\t\t\t\t; degrees of steering wheel rotation covered by the clip
+"""
+
+_FUEL_CONS_INI = """[FUEL_EVAL]
+KM_PER_LITER=9.5\t\t\t; used by AI/strategy fuel estimates
+"""
+
+_SETUP_INI = """[DISPLAY_METHOD]
+SHOW_CLICKS=1
+
+/////////////////////////////////////////////////////
+;TYRES
+/////////////////////////////////////////////////////
+
+[PRESSURE_LF]
+SHOW_CLICKS=0
+TAB=TYRES
+NAME=Pressure LF
+MIN=15
+MAX=40
+STEP=1
+POS_X=0
+POS_Y=2
+HELP=HELP_LF_PRESSURE
+
+[PRESSURE_RF]
+SHOW_CLICKS=0
+TAB=TYRES
+NAME=Pressure RF
+MIN=15
+MAX=40
+STEP=1
+POS_X=1
+POS_Y=2
+HELP=HELP_RF_PRESSURE
+
+[PRESSURE_LR]
+SHOW_CLICKS=0
+TAB=TYRES
+NAME=Pressure LR
+MIN=15
+MAX=40
+STEP=1
+POS_X=0
+POS_Y=3
+HELP=HELP_LR_PRESSURE
+
+[PRESSURE_RR]
+SHOW_CLICKS=0
+TAB=TYRES
+NAME=Pressure RR
+MIN=15
+MAX=40
+STEP=1
+POS_X=1
+POS_Y=3
+HELP=HELP_RR_PRESSURE
+
+/////////////////////////////////////////////////////
+;ALIGNMENT
+/////////////////////////////////////////////////////
+
+[CAMBER_LF]
+SHOW_CLICKS=0
+TAB=ALIGNMENT
+NAME=Camber LF
+MIN=-4.0
+MAX=0.5
+STEP=1
+POS_X=0
+POS_Y=0
+HELP=HELP_LF_CAMBER
+
+[CAMBER_RF]
+SHOW_CLICKS=0
+TAB=ALIGNMENT
+NAME=Camber RF
+MIN=-4.0
+MAX=0.5
+STEP=1
+POS_X=1
+POS_Y=0
+HELP=HELP_RF_CAMBER
+
+[CAMBER_LR]
+SHOW_CLICKS=0
+TAB=ALIGNMENT
+NAME=Camber LR
+MIN=-4.0
+MAX=0.5
+STEP=1
+POS_X=0
+POS_Y=1
+HELP=HELP_LR_CAMBER
+
+[CAMBER_RR]
+SHOW_CLICKS=0
+TAB=ALIGNMENT
+NAME=Camber RR
+MIN=-4.0
+MAX=0.5
+STEP=1
+POS_X=1
+POS_Y=1
+HELP=HELP_RR_CAMBER
+
+[TOE_OUT_LF]
+SHOW_CLICKS=2
+TAB=ALIGNMENT
+NAME=Toe LF
+MIN=-60
+MAX=70
+STEP=10
+POS_X=0
+POS_Y=2
+HELP=HELP_LF_TOE
+
+[TOE_OUT_RF]
+SHOW_CLICKS=2
+TAB=ALIGNMENT
+NAME=Toe RF
+MIN=-60
+MAX=70
+STEP=10
+POS_X=1
+POS_Y=2
+HELP=HELP_RF_TOE
+
+/////////////////////////////////////////////////////
+;GENERIC
+/////////////////////////////////////////////////////
+
+[FUEL]
+SHOW_CLICKS=0
+TAB=GENERIC
+NAME=Fuel
+MIN=5
+MAX=50
+STEP=1
+POS_X=0.5
+POS_Y=0
+HELP=HELP_FUEL
+
+[BRAKE_POWER_MULT]
+SHOW_CLICKS=0
+TAB=GENERIC
+NAME=Brake power
+MIN=80
+MAX=100
+STEP=1
+POS_X=0.5
+POS_Y=1
+HELP=HELP_BRAKE_POWER_MULT
+"""
+
 # ---------------------------------------------------------------------------
 #  Lookup tables referenced by the templates
 # ---------------------------------------------------------------------------
@@ -354,6 +770,7 @@ _POWER_LUT = """0|0
 6500|330
 7000|305
 7500|270
+7800|0
 """
 
 # Road-car body aero (values follow Kunos ks_mazda_mx5_nd2)
@@ -519,6 +936,27 @@ _CONTROLLER_SPEED = """0|0
 61|1
 """
 
+# Tyre wear (virtual km -> grip %) and thermal (temp C -> grip multiplier)
+_WEAR_STREET = """0|100
+30|99.8
+60|99.6
+100|99.4
+300|98.5
+600|97.5
+1000|96.5
+"""
+
+_TCURVE_STREET = """-20|0.85
+0|0.89
+20|0.95
+50|0.99
+75|1.00
+90|1.00
+110|0.98
+130|0.92
+150|0.85
+"""
+
 LUT_FILES = {
     "power.lut": _POWER_LUT,
     "wing_body_AOA_CL.lut": _WING_BODY_CL,
@@ -537,13 +975,28 @@ LUT_FILES = {
     "height_diffuser_CD.lut": _HEIGHT_DIFFUSER_CD,
     "wing_controller_brake.lut": _CONTROLLER_BRAKE,
     "wing_controller_speed.lut": _CONTROLLER_SPEED,
+    "street_front.lut": _WEAR_STREET,
+    "street_rear.lut": _WEAR_STREET,
+    "tcurve_street.lut": _TCURVE_STREET,
 }
 
 CONFIG_TEMPLATES = {
+    # The four core templates
     "car.ini": _CAR_INI,
     "engine.ini": _ENGINE_INI,
     "suspensions.ini": _SUSPENSIONS_INI,
     "aero.ini": _AERO_INI,
+    # The rest of the minimum set a drivable AC car needs
+    "drivetrain.ini": _DRIVETRAIN_INI,
+    "tyres.ini": _TYRES_INI,
+    "brakes.ini": _BRAKES_INI,
+    "electronics.ini": _ELECTRONICS_INI,
+    "colliders.ini": _COLLIDERS_INI,
+    "ai.ini": _AI_INI,
+    "lods.ini": _LODS_INI,
+    "driver3d.ini": _DRIVER3D_INI,
+    "setup.ini": _SETUP_INI,
+    "fuel_cons.ini": _FUEL_CONS_INI,
     # Kunos SDK sample ships these zero-byte: an EMPTY drs.ini keeps DRS
     # disabled (any non-empty drs.ini enables it). Populate them via the
     # " ADD COMPONENT ▾" DRS / Wing Animation templates.
@@ -908,6 +1361,49 @@ COMPONENT_LIBRARY = {
                                      "GAIN": "0.0004",
                                      "MAX_DAMAGE": "0.05",
                                      "DEBUG_LOG": "0"})],
+        },
+    },
+    "drivetrain.ini": {
+        "Differential": {
+            "Open diff": [("DIFFERENTIAL", {"POWER": "0", "COAST": "0",
+                                            "PRELOAD": "0"})],
+            "Street LSD": [("DIFFERENTIAL", {"POWER": "0.60", "COAST": "0.45",
+                                             "PRELOAD": "0"})],
+            "Race LSD (preloaded)": [("DIFFERENTIAL", {"POWER": "0.75",
+                                                       "COAST": "0.60",
+                                                       "PRELOAD": "60"})],
+        },
+        "Traction": {
+            "RWD": [("TRACTION", {"TYPE": "RWD"})],
+            "FWD": [("TRACTION", {"TYPE": "FWD"})],
+            "AWD (with front share)": [
+                ("TRACTION", {"TYPE": "AWD"}),
+                ("AWD", {"FRONT_SHARE": "0.40"}),
+            ],
+        },
+    },
+    "electronics.ini": {
+        "Driver Aids": {
+            "Street ABS + TC": [
+                ("ABS", {"SLIP_RATIO_LIMIT": "0.11", "CURVE": "",
+                         "PRESENT": "1", "ACTIVE": "1", "RATE_HZ": "250"}),
+                ("TRACTION_CONTROL", {"SLIP_RATIO_LIMIT": "0.11",
+                                      "CURVE": "", "PRESENT": "1",
+                                      "ACTIVE": "1", "RATE_HZ": "170",
+                                      "MIN_SPEED_KMH": "35"}),
+            ],
+            "No assists (race)": [
+                ("ABS", {"PRESENT": "0", "ACTIVE": "0"}),
+                ("TRACTION_CONTROL", {"PRESENT": "0", "ACTIVE": "0"}),
+            ],
+            "Electronic Diff Lock (EDL)": [
+                ("EDL", {"PRESENT": "1", "ACTIVE": "1",
+                         "MAX_SPIN_POWER": "0.8", "MAX_SPIN_COAST": "0.4",
+                         "BRAKE_TORQUE_POWER": "50",
+                         "BRAKE_TORQUE_COAST": "400",
+                         "DEAD_ZONE_POWER": "0.2",
+                         "DEAD_ZONE_COAST": "0.0"}),
+            ],
         },
     },
 }

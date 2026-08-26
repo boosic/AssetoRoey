@@ -15,10 +15,15 @@ on Debian/Ubuntu: `sudo apt install python3-tk`).
 
 - **Project generator** — creates the strict AC `content/cars/<car_id>`
   hierarchy (`data`, `sfx`, `skins/00_default`, `ui`) with:
-  - Kunos-style physics templates (`car.ini`, `engine.ini`,
-    `suspensions.ini`, `aero.ini`) whose keys and default values follow real
-    extracted Kunos car data,
-  - lookup tables (`power.lut`, wing AoA LUTs),
+  - Kunos-style physics templates whose keys and default values follow real
+    extracted Kunos car data: the four core files (`car.ini`, `engine.ini`,
+    `suspensions.ini`, `aero.ini`) plus the rest of the minimum drivable
+    set (`drivetrain.ini`, `tyres.ini` v10, `brakes.ini`,
+    `electronics.ini`, `colliders.ini`, `ai.ini`, `lods.ini`,
+    `driver3d.ini`, `setup.ini`, `fuel_cons.ini`, and zero-byte
+    `drs.ini`/`wing_animations.ini`),
+  - lookup tables (`power.lut`, wing AoA + ground-height LUTs, tyre
+    wear/thermal curves) — every LUT referenced by an ini exists on disk,
   - a valid `ui/ui_car.json` + `ui_skin.json`,
   - placeholder text files for every mandatory binary asset (`.kn5` models,
     FMOD `.bank` + `GUIDs.txt`, previews, badges, blob shadows) explaining
@@ -46,6 +51,10 @@ on Debian/Ubuntu: `sudo apt install python3-tk`).
   - *aero.ini*: rear wing, front splitter, body aero, DRS flap,
   - *suspensions.ini*: street/sport/race anti-roll bars, formula heave
     (3rd element), suspension damage,
+  - *drs.ini* / *wing_animations.ini*: F1-style or road-car DRS, flap
+    animation binding,
+  - *drivetrain.ini*: differential presets, RWD/FWD/AWD traction,
+  - *electronics.ini*: ABS/TC presets, electronic diff lock,
   - plus a one-click "Add ALL variants" per group.
 
 ## Architecture
